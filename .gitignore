@@ -1,0 +1,25 @@
+.DS_Store
+roadmap/
+
+# Backend
+__pycache__/
+*.py[cod]
+venv/
+.env
+*.db
+
+# Terraform
+.terraform/
+*.tfstate*
+terraform.tfvars
+
+# IDE
+.vscode/
+.idea/
+
+# Frontend
+node_modules/
+dist/
+
+# Log
+*.log
