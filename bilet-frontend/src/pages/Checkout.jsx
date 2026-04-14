@@ -3,11 +3,11 @@ import { useLocation, Navigate, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
 function Checkout() {
+  const backendUrl = import.meta.env.VITE_API_URL;
   const navigate = useNavigate();
   const location = useLocation();
   const event = location.state?.event;
 
-  // Gerçek kart state'leri
   const [cardHolderName, setCardHolderName] = useState('');
   const [cardNumber, setCardNumber] = useState('');
   const [expireDate, setExpireDate] = useState('');
@@ -24,7 +24,7 @@ function Checkout() {
     const [expireMonth, expireYear] = expireDate.split('/');
 
     try {
-      const response = await fetch(`http://ticket-app-lb-1559682675.eu-central-1.elb.amazonaws.com/api/events/buy/${event.id}`, {
+      const response = await fetch(`${backendUrl}/api/events/buy/${event.id}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

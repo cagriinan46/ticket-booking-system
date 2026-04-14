@@ -34,7 +34,6 @@ variable "db_password" {
   sensitive   = true
 }
 
-variable "db_password" { type = string }
 variable "iyzico_api_key" { type = string }
 variable "iyzico_secret_key" { type = string }
 variable "sender_mail" { type = string }

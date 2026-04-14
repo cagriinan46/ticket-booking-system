@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 
 function Admin() {
+  const backendUrl = import.meta.env.VITE_API_URL;
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
   const [location, setLocation] = useState('');
@@ -18,7 +19,7 @@ function Admin() {
     }
 
     try {
-      const response = await fetch('http://ticket-app-lb-1559682675.eu-central-1.elb.amazonaws.com/api/events/', {
+      const response = await fetch(`${backendUrl}/api/events/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

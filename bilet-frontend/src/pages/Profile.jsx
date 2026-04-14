@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 function Profile() {
+  const backendUrl = import.meta.env.VITE_API_URL;
   const [tickets, setTickets] = useState([]);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
@@ -14,7 +15,7 @@ function Profile() {
       return;
     }
 
-    fetch('http://ticket-app-lb-1559682675.eu-central-1.elb.amazonaws.com/api/events/my-tickets', {
+    fetch(`${backendUrl}/api/events/my-tickets`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`

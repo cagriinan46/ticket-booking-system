@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
 function Login() {
+  const backendUrl = import.meta.env.VITE_API_URL;
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -15,7 +16,7 @@ function Login() {
         formData.append('username', email); 
         formData.append('password', password); 
 
-        const response = await fetch('http://ticket-app-lb-1559682675.eu-central-1.elb.amazonaws.com/api/auth/login', {
+        const response = await fetch(`${backendUrl}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: formData.toString()
@@ -36,7 +37,7 @@ function Login() {
       }
     } else {
         try {
-            const response = await fetch('http://ticket-app-lb-1559682675.eu-central-1.elb.amazonaws.com/api/auth/register', {
+            const response = await fetch(`${backendUrl}/api/auth/register`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ email: email, password: password }) 

@@ -3,13 +3,14 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
 function EventDetail() {
+  const backendUrl = import.meta.env.VITE_API_URL;
   const { id } = useParams();
   const navigate = useNavigate();
   const [event, setEvent] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('http://ticket-app-lb-1559682675.eu-central-1.elb.amazonaws.com/api/events/')
+    fetch(`${backendUrl}/api/events/`)
       .then(res => res.json())
       .then(data => {
         const foundEvent = data.find(e => e.id === parseInt(id));

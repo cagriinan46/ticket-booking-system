@@ -6,6 +6,10 @@ import models
 
 app = FastAPI(title= "BiletSistemi API")
 
+@app.get("/")
+def root():
+    return {"status": "OK"}
+
 # origins = [
 #     "http://localhost:5173",
 #     "http://127.0.0.1:5173"
@@ -23,7 +27,3 @@ models.Base.metadata.create_all(bind=engine)
 
 app.include_router(events.router)
 app.include_router(auth.router)
-
-app.get("/")
-def root():
-    return {"status": "OK"}

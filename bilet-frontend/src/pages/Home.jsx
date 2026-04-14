@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import EventCard from '../components/EventCard';
 
 function Home() {
+  const backendUrl = import.meta.env.VITE_API_URL;
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch('http://ticket-app-lb-1559682675.eu-central-1.elb.amazonaws.com/api/events/')
+    fetch(`${backendUrl}/api/events/`)
       .then(res => {
         if (!res.ok) throw new Error("Etkinlikler yüklenemedi.");
         return res.json();
