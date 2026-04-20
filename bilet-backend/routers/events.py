@@ -164,7 +164,7 @@ def get_my_tickets(current_user: models.User = Depends(get_current_user), db: Se
     my_tickets = db.query(models.Ticket).filter(models.Ticket.user_id == current_user.id).all()
     return my_tickets
 
-@router.delete("{event_id}")
+@router.delete("/{event_id}")
 def delete_event(event_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Bu islem icin yetkiniz yok!")
