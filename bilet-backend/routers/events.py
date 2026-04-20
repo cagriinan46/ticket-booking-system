@@ -173,6 +173,8 @@ def delete_event(event_id: int, current_user: models.User = Depends(get_current_
 
     if not event:
         raise HTTPException(status_code=404, detail="Boyle bir etkinlik bulunamadi!")
+    
+    db.query(models.Ticket).filter(models.Ticket.event_id == event_id).delete(synchronize_session=False)
         
     db.delete(event)
     db.commit()
