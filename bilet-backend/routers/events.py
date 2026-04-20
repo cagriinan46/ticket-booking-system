@@ -164,3 +164,22 @@ def get_my_tickets(current_user: models.User = Depends(get_current_user), db: Se
     my_tickets = db.query(models.Ticket).filter(models.Ticket.user_id == current_user.id).all()
     return my_tickets
 
+@router.delete("{event_id}")
+def delete_event(event_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Bu islem icin yetkiniz yok!")
+    
+    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Boyle bir etkinlik bulunamadi!")
+        
+    db.delete(event)
+    db.commit()
+
+    return {"mesaj": "Etkinlik basariyla silindi!"}
+
+    
+
+
+    
