@@ -17,8 +17,8 @@ function EventDetail() {
         if (foundEvent) {
           setEvent({
             ...foundEvent,
-            image: 'https://images.unsplash.com/photo-1540039155732-6847350357a5?w=500&q=80',
-            description: 'Bu muhteşem etkinliği kaçırmamak için hemen biletinizi alın! Yerler sınırlı.'
+            image: foundEvent.image || 'https://images.unsplash.com/photo-1540039155732-6847350357a5?w=500&q=80',
+            description: foundEvent.description || 'Bu muhteşem etkinliği kaçırmamak için hemen biletinizi alın! Yerler sınırlı.'
           });
         }
         setLoading(false);

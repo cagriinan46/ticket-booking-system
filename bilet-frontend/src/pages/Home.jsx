@@ -6,9 +6,11 @@ function Home() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
-    fetch(`${backendUrl}/api/events/`)
+    fetch(`${backendUrl}/api/events`)
       .then(res => {
         if (!res.ok) throw new Error("Etkinlikler yüklenemedi.");
         return res.json();
@@ -23,6 +25,10 @@ function Home() {
       });
   }, []);
 
+  const filteredEvents = events.filter(event => 
+    event.title.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
     <div>
       <div className="bg-blue-50 border border-blue-200 p-8 rounded mb-8 text-center">
@@ -33,9 +39,11 @@ function Home() {
           <input 
             type="text" 
             placeholder="Etkinlik ara..." 
-            className="w-full px-3 py-2 border border-gray-300 rounded-l focus:outline-none"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-l focus:outline-none focus:border-blue-500"
           />
-          <button className="bg-blue-600 text-white px-6 py-2 rounded-r hover:bg-blue-700 font-bold">
+          <button className="bg-blue-600 text-white px-6 py-2 rounded-r hover:bg-blue-700 font-bold transition-colors">
             Ara
           </button>
         </div>
@@ -48,14 +56,16 @@ function Home() {
       {loading && <p className="text-center text-gray-500 py-10">Etkinlikler yükleniyor...</p>}
       {error && <p className="text-center text-red-500 py-10">{error}</p>}
 
-      {!loading && !error && events.length === 0 ? (
-        <p className="text-center text-gray-500 py-10">Sistemde henüz hiç etkinlik yok.</p>
+      {!loading && !error && filteredEvents.length === 0 ? (
+        <p className="text-center text-gray-500 py-10">
+          {searchTerm ? 'Aradığınız kritere uygun etkinlik bulunamadı.' : 'Sistemde henüz hiç etkinlik yok.'}
+        </p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {events.map(event => {
+          {filteredEvents.map(event => {
             const eventWithImage = {
               ...event,
-              image: 'https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=500&q=80'
+              image: event.image || 'https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=500&q=80'
             };
             return <EventCard key={event.id} event={eventWithImage} />;
           })}

@@ -5,6 +5,8 @@ from database import get_db
 from routers.auth import get_current_user
 from fastapi import HTTPException
 from dotenv import load_dotenv
+from typing import Optional
+from sqlalchemy import text
 import models
 import iyzipay
 import boto3
@@ -26,6 +28,8 @@ class EventCreate(BaseModel):
     date: str
     location: str
     price: str
+    description: str
+    image: Optional[str] = None
 
 class EventSchema(BaseModel):
     id: int
@@ -33,6 +37,8 @@ class EventSchema(BaseModel):
     date: str
     location: str
     price: str
+    description: str
+    image: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -180,6 +186,18 @@ def delete_event(event_id: int, current_user: models.User = Depends(get_current_
     db.commit()
 
     return {"mesaj": "Etkinlik basariyla silindi!"}
+
+@router.get("/fix-database-image")
+def fix_db(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("ALTER TABLE events ADD COLUMN image VARCHAR;"))
+        db.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS description VARCHAR;"))
+        db.commit()
+        return {"mesaj": "Veritabanina image ve desc kolonlari basariyla eklendi!"}
+    except Exception as e:
+        return {"hata": f"detay: {str(e)}"}
+
+
 
     
 

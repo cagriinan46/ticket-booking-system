@@ -8,6 +8,7 @@ function Admin() {
   const [location, setLocation] = useState('');
   const [price, setPrice] = useState('');
   const [description, setDescription] = useState('');
+  const [image, setImage] = useState('');
   const [events, setEvents] = useState([]);
 
   useEffect(() => {
@@ -16,7 +17,7 @@ function Admin() {
 
   const fetchEvents = async () => {
     try {
-      const response = await fetch(`${backendUrl}/api/events/`);
+      const response = await fetch(`${backendUrl}/api/events`);
       if (response.ok) {
         const data = await response.json();
         setEvents(data);
@@ -36,7 +37,7 @@ function Admin() {
     }
 
     try {
-      const response = await fetch(`${backendUrl}/api/events/`, {
+      const response = await fetch(`${backendUrl}/api/events`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -48,6 +49,7 @@ function Admin() {
           location: location,
           price: price,
           description: description,
+          image: image,
           capacity: 500
         })
       });
@@ -56,11 +58,13 @@ function Admin() {
 
       toast.success('Etkinlik başarıyla eklendi! Ana sayfada görebilirsin.');
       
+      // Formu temizle
       setTitle(''); 
       setDate(''); 
       setLocation(''); 
       setPrice(''); 
       setDescription('');
+      setImage('');
       
       fetchEvents();
       
@@ -115,9 +119,15 @@ function Admin() {
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">Fiyat (TL)</label>
-            <input type="text" required value={price} onChange={e => setPrice(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"/>
+          <div className="flex gap-4">
+            <div className="w-1/3">
+              <label className="block text-sm font-bold text-gray-700 mb-1">Fiyat (TL)</label>
+              <input type="text" required value={price} onChange={e => setPrice(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"/>
+            </div>
+            <div className="w-2/3">
+              <label className="block text-sm font-bold text-gray-700 mb-1">Resim Linki (URL)</label>
+              <input type="url" required value={image} onChange={e => setImage(e.target.value)} placeholder="Örn: https://resim-linki.com/foto.jpg" className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"/>
+            </div>
           </div>
 
           <div>

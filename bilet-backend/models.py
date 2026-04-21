@@ -17,6 +17,8 @@ class Event(Base):
     date = Column(String)
     location = Column(String)
     price = Column(String)
+    description = Column(String, nullable=True)
+    image = Column(String, nullable=True)
 
 class Ticket(Base):
     __tablename__ = "tickets"

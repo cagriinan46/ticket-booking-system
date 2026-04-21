@@ -22,9 +22,9 @@ function Navbar() {
       <div className="space-x-4 flex items-center">
         <Link to="/" className="hover:underline text-sm">Ana Sayfa</Link>
         <span className="text-gray-400">|</span>
-        <a href="#" className="hover:underline text-sm">Hakkında</a>
+        <Link to="/about" className="hover:underline text-sm">Hakkında</Link>
         
-        {isAdmin && (
+        {(isLoggedIn && isAdmin) && (
           <>
             <span className="text-gray-400">|</span>
             <Link to="/admin" className="bg-red-600 text-white px-3 py-1.5 rounded text-sm font-bold hover:bg-red-700 shadow-sm">
