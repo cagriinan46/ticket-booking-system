@@ -44,7 +44,11 @@ function EventDetail() {
       
       <div className="flex flex-col md:flex-row gap-8">
         <div className="md:w-1/2">
-          <img src={event.image} alt={event.title} className="w-full h-80 object-cover rounded border border-gray-200" />
+          <img 
+          src={event.image} 
+          alt={event.title} 
+          className="w-full h-96 object-contain bg-gray-50 rounded border border-gray-200 shadow-sm" 
+          />
         </div>
         
         <div className="md:w-1/2 flex flex-col">

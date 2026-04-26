@@ -10,6 +10,14 @@ function Admin() {
   const [description, setDescription] = useState('');
   const [image, setImage] = useState('');
   const [events, setEvents] = useState([]);
+  const [city, setCity] = useState('İstanbul');
+  const [category, setCategory] = useState('Konser');
+
+  const cities = [
+    "İstanbul", "Ankara", "İzmir", "Adana", "Adıyaman", "Afyonkarahisar", "Ağrı", "Aksaray", "Amasya", "Antalya", "Ardahan", "Artvin", "Aydın", "Balıkesir", "Bartın", "Batman", "Bayburt", "Bilecik", "Bingöl", "Bitlis", "Bolu", "Burdur", "Bursa", "Çanakkale", "Çankırı", "Çorum", "Denizli", "Diyarbakır", "Düzce", "Edirne", "Elazığ", "Erzincan", "Erzurum", "Eskişehir", "Gaziantep", "Giresun", "Gümüşhane", "Hakkari", "Hatay", "Iğdır", "Isparta", "Kahramanmaraş", "Karabük", "Karaman", "Kars", "Kastamonu", "Kayseri", "Kırıkkale", "Kırklareli", "Kırşehir", "Kilis", "Kocaeli", "Konya", "Kütahya", "Malatya", "Manisa", "Mardin", "Mersin", "Muğla", "Muş", "Nevşehir", "Niğde", "Ordu", "Osmaniye", "Rize", "Sakarya", "Samsun", "Siirt", "Sinop", "Sivas", "Şanlıurfa", "Şırnak", "Tekirdağ", "Tokat", "Trabzon", "Tunceli", "Uşak", "Van", "Yalova", "Yozgat", "Zonguldak"
+  ];
+
+  const categories = ['Konser', 'Tiyatro', 'Festival', 'Stand-up', 'Spor'];
 
   useEffect(() => {
     fetchEvents();
@@ -50,6 +58,8 @@ function Admin() {
           price: price,
           description: description,
           image: image,
+          city: city,
+          category: category,
           capacity: 500
         })
       });
@@ -58,13 +68,14 @@ function Admin() {
 
       toast.success('Etkinlik başarıyla eklendi! Ana sayfada görebilirsin.');
       
-      // Formu temizle
       setTitle(''); 
       setDate(''); 
       setLocation(''); 
       setPrice(''); 
       setDescription('');
       setImage('');
+      setCity('İstanbul');
+      setCategory('Konser');
       
       fetchEvents();
       
@@ -120,6 +131,21 @@ function Admin() {
           </div>
 
           <div className="flex gap-4">
+            <div className="w-1/2">
+              <label className="block text-sm font-bold text-gray-700 mb-1">Şehir</label>
+              <select value={city} onChange={e => setCity(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500 bg-white">
+                {cities.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="w-1/2">
+              <label className="block text-sm font-bold text-gray-700 mb-1">Kategori</label>
+              <select value={category} onChange={e => setCategory(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500 bg-white">
+                {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
             <div className="w-1/3">
               <label className="block text-sm font-bold text-gray-700 mb-1">Fiyat (TL)</label>
               <input type="text" required value={price} onChange={e => setPrice(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"/>
@@ -151,7 +177,7 @@ function Admin() {
               <li key={event.id} className="p-4 flex justify-between items-center hover:bg-gray-50 transition-colors">
                 <div>
                   <p className="font-bold text-gray-800">{event.title}</p>
-                  <p className="text-sm text-gray-600 mt-1">{event.date} | {event.location} | <span className="font-semibold text-blue-600">{event.price} TL</span></p>
+                  <p className="text-sm text-gray-600 mt-1">{event.city} | {event.category} | {event.date} | <span className="font-semibold text-blue-600">{event.price} TL</span></p>
                 </div>
                 <button 
                   onClick={() => handleDelete(event.id)}

@@ -30,6 +30,8 @@ class EventCreate(BaseModel):
     price: str
     description: str
     image: Optional[str] = None
+    city: str
+    category: str
 
 class EventSchema(BaseModel):
     id: int
@@ -39,6 +41,8 @@ class EventSchema(BaseModel):
     price: str
     description: str
     image: Optional[str] = None
+    city: str
+    category: str
 
     class Config:
         from_attributes = True
@@ -63,9 +67,19 @@ class PaymentRequest(BaseModel):
 
 @router.post("/")
 def create_event(event: EventCreate, db: Session = Depends(get_db)):
-    new_model = models.Event(title=event.title, date=event.date, location=event.location, price=event.price)
+    new_model = models.Event(
+        title=event.title, 
+        date=event.date, 
+        location=event.location, 
+        price=event.price, 
+        description=event.description, 
+        image=event.image,
+        city=event.city,
+        category=event.category
+        )
     db.add(new_model)
     db.commit()
+    db.refresh(new_model)
     return {"mesaj": "Etkinlik basariyla olusturuldu!"}
 
 @router.get("/")
@@ -187,17 +201,25 @@ def delete_event(event_id: int, current_user: models.User = Depends(get_current_
 
     return {"mesaj": "Etkinlik basariyla silindi!"}
 
-@router.get("/fix-database-image")
-def fix_db(db: Session = Depends(get_db)):
-    try:
-        db.execute(text("ALTER TABLE events ADD COLUMN image VARCHAR;"))
-        db.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS description VARCHAR;"))
-        db.commit()
-        return {"mesaj": "Veritabanina image ve desc kolonlari basariyla eklendi!"}
-    except Exception as e:
-        return {"hata": f"detay: {str(e)}"}
+# @router.get("/fix-database-columns")
+# def fix_db(db: Session = Depends(get_db)):
+#     try:
+#         db.execute(text("ALTER TABLE events ADD COLUMN image VARCHAR;"))
+#         db.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS description VARCHAR;"))
+#         db.commit()
+#         return {"mesaj": "Veritabanina image ve desc kolonlari basariyla eklendi!"}
+#     except Exception as e:
+#         return {"hata": f"detay: {str(e)}"}
 
-
+# @router.get("/fix-database-v2")
+# def fix_db_v2(db: Session = Depends(get_db)):
+#     try:
+#         db.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS city VARCHAR DEFAULT 'İstanbul';"))
+#         db.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT 'Konser';"))
+#         db.commit()
+#         return {"mesaj": "Sehir ve Kategori kolonlari basariyla eklendi!"}
+#     except Exception as e:
+#         return {"hata": "Zaten eklenmis veya bir sorun var", "detay": str(e)}
 
     
 
