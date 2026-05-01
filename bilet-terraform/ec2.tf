@@ -24,7 +24,7 @@ resource "aws_iam_role_policy_attachment" "ses_full_access" {
 }
 
 resource "aws_iam_role_policy_attachment" "ssm_policy_attach" {
-  role       = aws_iam_role.ec2_role.name 
+  role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 

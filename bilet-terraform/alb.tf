@@ -40,8 +40,8 @@ resource "aws_lb_listener" "http_listener" {
 
 resource "aws_lb_target_group_attachment" "backend_attachment" {
   target_group_arn = aws_lb_target_group.ticket_tg.arn
-  target_id = aws_instance.producer_api.id
-  port = 8000
+  target_id        = aws_instance.producer_api.id
+  port             = 8000
 }
 
 output "alb_dns_name" {
