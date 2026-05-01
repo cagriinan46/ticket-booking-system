@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from typing import Optional
 from sqlalchemy import text
 from datetime import datetime
+from sqlalchemy.orm import joinedload
 import models
 import iyzipay
 import boto3
@@ -116,7 +117,7 @@ def get_my_reviews(db: Session = Depends(get_db), current_user: models.User = De
 
 @router.get("/my-tickets", response_model=list[TicketResponse])
 def get_my_tickets(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    my_tickets = db.query(models.Ticket).filter(models.Ticket.user_id == current_user.id).all()
+    my_tickets = db.query(models.Ticket).options(joinedload(models.Ticket.event)).filter(models.Ticket.user_id == current_user.id).all()
     return my_tickets
 
 @router.post("/ticket-transfer")
