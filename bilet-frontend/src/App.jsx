@@ -5,9 +5,12 @@ import Home from './pages/Home';
 import EventDetail from './pages/EventDetail';
 import Login from './pages/Login';
 import Checkout from './pages/Checkout';
-import Profile from './pages/Profile';
+import MyTickets from './pages/MyTickets';
 import Admin from './pages/Admin';
 import About from './pages/About';
+import Reviews from './pages/Reviews';
+import Favorites from './pages/Favorites';
+import Profile from './pages/Profile';
 
 function App() {
   return (
@@ -18,9 +21,12 @@ function App() {
           <Route path="/event/:id" element={<EventDetail />} />
           <Route path="/login" element={<Login />} />
           <Route path="/checkout" element={<Checkout />} />
-          <Route path="/profile" element={<Profile />} />
+          <Route path="/my-tickets" element={<MyTickets />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/about" element={<About />} />
+          <Route path="/reviews" element={<Reviews />} />
+          <Route path="/favorites" element={<Favorites />} />
+          <Route path="/profile" element={<Profile />} />
         </Route>
       </Routes>
     </Router>

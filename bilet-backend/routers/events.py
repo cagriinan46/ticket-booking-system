@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from database import get_db
 from routers.auth import get_current_user
@@ -7,11 +7,14 @@ from fastapi import HTTPException
 from dotenv import load_dotenv
 from typing import Optional
 from sqlalchemy import text
+from datetime import datetime
 import models
 import iyzipay
 import boto3
 import json
 import os
+import requests
+
 
 load_dotenv()
 
@@ -32,6 +35,8 @@ class EventCreate(BaseModel):
     image: Optional[str] = None
     city: str
     category: str
+    capacity: int
+    time: str
 
 class EventSchema(BaseModel):
     id: int
@@ -43,9 +48,16 @@ class EventSchema(BaseModel):
     image: Optional[str] = None
     city: str
     category: str
+    capacity: int
+    available_tickets: int
+    time: str
 
     class Config:
         from_attributes = True
+
+class TicketTransferSchema(BaseModel):
+    id: int
+    target_email: str
 
 class TicketResponse(BaseModel):
     id: int
@@ -64,6 +76,9 @@ class PaymentRequest(BaseModel):
     expireYear: str
     cvc: str
 
+class ReviewCreate(BaseModel):
+    rating: int = Field(..., ge=1, le=5, description="a score between 1 and 5")
+    comment: Optional[str] = None
 
 @router.post("/")
 def create_event(event: EventCreate, db: Session = Depends(get_db)):
@@ -75,7 +90,9 @@ def create_event(event: EventCreate, db: Session = Depends(get_db)):
         description=event.description, 
         image=event.image,
         city=event.city,
-        category=event.category
+        category=event.category,
+        capacity=event.capacity,
+        time=event.time
         )
     db.add(new_model)
     db.commit()
@@ -85,7 +102,24 @@ def create_event(event: EventCreate, db: Session = Depends(get_db)):
 @router.get("/")
 def get_all_events(db: Session = Depends(get_db)):
     events = db.query(models.Event).all()
+
+    for event in events:
+        sold_count = db.query(models.Ticket).filter(models.Ticket.event_id == event.id).count()
+        event.available_tickets = event.capacity - sold_count
+
     return events
+
+@router.get("/{event_id}", response_model=EventSchema)
+def get_single_event(event_id: int, db: Session = Depends(get_db)):
+    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Boyle bir etkinlik bulunamadi!")
+
+    sold_count = db.query(models.Ticket).filter(models.Ticket.event_id == event.id).count()
+    event.available_tickets = event.capacity - sold_count
+
+    return event
 
 @router.post("/buy/{event_id}")
 def buy_ticket(event_id: int, payment_data: PaymentRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -93,6 +127,11 @@ def buy_ticket(event_id: int, payment_data: PaymentRequest, db: Session = Depend
 
     if not event:
         raise HTTPException(status_code=404, detail="Boyle bir etkinlik bulunamadi!")
+
+    sold_count = db.query(models.Ticket).filter(models.Ticket.event_id == event.id).count()
+
+    if sold_count >= event.capacity:
+        raise HTTPException(status_code=400, detail="Bu etkinlik icin stoklar tukendi!")
     
     options = {
         'api_key': os.getenv("IYZICO_API_KEY"),
@@ -201,6 +240,166 @@ def delete_event(event_id: int, current_user: models.User = Depends(get_current_
 
     return {"mesaj": "Etkinlik basariyla silindi!"}
 
+@router.post("/ticket-transfer")
+def ticket_transfer(payload: TicketTransferSchema, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    db_ticket = db.query(models.Ticket).filter(models.Ticket.id == payload.id).first()
+    
+    if not db_ticket:
+        raise HTTPException(status_code=404, detail="Bilet bulunamadi!")
+        
+    if db_ticket.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Sadece kendi biletlerinizi transfer edebilirsiniz!")
+
+    target_user = db.query(models.User).filter(models.User.email == payload.target_email).first()
+    
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Bu e-posta adresine sahip bir kullanici bulunamadi!")
+        
+    if target_user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Bilet zaten size ait!")
+
+    db_ticket.user_id = target_user.id
+    db.commit()
+    db.refresh(db_ticket)
+    
+    return {"mesaj": "Bilet basariyla transfer edildi!"}
+
+@router.post("/toggle-favorite/{event_id}")
+def toggle_favorite(event_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
+
+    if not db_event:
+        raise HTTPException(status_code=404, detail="Boyle bir etkinlik bulunamadi!")
+
+    if db_event not in current_user.favorite_events:
+        current_user.favorite_events.append(db_event)
+        is_added = True
+    
+    else:
+        current_user.favorite_events.remove(db_event)
+        is_added = False
+
+    db.commit()
+
+    if is_added:
+        return {"mesaj": "Etkinlik favorilere eklendi!", "status": "added"}
+    else:
+        return {"mesaj": "Etkinlik favorilerden cikarildi!", "status": "removed"}
+    
+@router.get("/my-favorites")
+def get_my_favorites(current_user: models.User = Depends(get_current_user)):
+    return current_user.favorite_events
+
+@router.post("/events/{event_id}/reviews")
+def create_review(event_id: int, review: ReviewCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
+
+    if not db_event:
+        raise HTTPException(status_code=404, detail="Boyle bir etkinlik bulunamadi!")
+    
+    has_ticket = db.query(models.Ticket).filter(
+        models.Ticket.user_id == current_user.id,
+        models.Ticket.event_id == event_id
+    ).first()
+
+    if not has_ticket:
+        raise HTTPException(status_code=403, detail="Sadece bilet aldiginiz etkinliklere degerlendirme yapabilirsiniz!")
+    
+    existing_review = db.query(models.Review).filter(
+        models.Review.user_id == current_user.id,
+        models.Review.event_id == event_id
+    ).first()
+
+    if existing_review:
+        raise HTTPException(status_code=400, detail="Bu etkinliği zaten değerlendirdiniz!")
+    
+    new_review = models.Review(
+        rating=review.rating,
+        comment=review.comment,
+        user_id=current_user.id,
+        event_id=event_id
+    )
+
+    db.add(new_review)
+    db.commit()
+
+    return {"mesaj": "Degerlendirmeniz basariyla eklendi!"}
+
+@router.get("/events/{event_id}/reviews")
+def get_all_reviews(event_id: int, db: Session = Depends(get_db)):
+    all_reviews = db.query(models.Review).filter(models.Review.event_id == event_id).all()
+    return all_reviews
+
+@router.get("/my-reviews")
+def get_my_reviews(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    my_reviews = db.query(models.Review).filter(models.Review.user_id == current_user.id).all()
+    return my_reviews
+
+@router.get("/{id}/calendar")
+def calendar(id: int, db: Session = Depends(get_db)):
+    db_event = db.query(models.Event).filter(models.Event.id == id).first()
+
+    if not db_event:
+        raise HTTPException(status_code=404, detail="Boyle bir etkinlik bulunamadi!")
+    
+    formatted_date = str(db_event.date).replace("-", "")
+    
+    ics_content = f"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//PortaBilet//TR
+BEGIN:VEVENT
+SUMMARY:{db_event.title}
+DESCRIPTION:PortaBilet üzerinden aldığınız etkinlik.
+DTSTART;VALUE=DATE:{formatted_date}
+LOCATION:{db_event.location}
+END:VEVENT
+END:VCALENDAR"""
+
+    return Response(
+        content=ics_content,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f"attachment; filename=portabilet_etkinlik_{id}.ics"}
+        )
+
+@router.get("/{event_id}/weather")
+def get_event_weather(event_id: int, db: Session = Depends(get_db)):
+    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Etkinlik bulunamadi!")
+    
+    event_date = datetime.strptime(event.date, "%Y-%m-%d").date()
+    today = datetime.now().date()
+
+    days_diff = (event_date - today).days
+
+    if days_diff < 0:
+        return {"status": "unavailable", "message": "Etkinligin gunu gecmis."}
+    elif days_diff > 5:
+        return {"status": "unavailable", "message": "Tahmin icin erken."}
+    else:
+        api_key = os.getenv("OPENWEATHER_API_KEY")
+        city = event.city
+
+        try:
+            geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},TR&limit=1&appid={api_key}"
+            geo_response = requests.get(geo_url)
+            geo_response.raise_for_status()
+            geo_data = geo_response.json()
+
+            lat = geo_data[0]["lat"]
+            lon = geo_data[0]["lon"]
+
+            weather_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={api_key}&units=metric&lang=tr"
+            weather_response = requests.get(weather_url)
+            weather_response.raise_for_status()
+            data = weather_response.json()
+
+            return {"status": "success", "data": data}
+            
+        except Exception as e:
+            return {"status": "error", "message": f"Hava durumu cekilemedi: {str(e)}"}
+
 # @router.get("/fix-database-columns")
 # def fix_db(db: Session = Depends(get_db)):
 #     try:
@@ -220,8 +419,3 @@ def delete_event(event_id: int, current_user: models.User = Depends(get_current_
 #         return {"mesaj": "Sehir ve Kategori kolonlari basariyla eklendi!"}
 #     except Exception as e:
 #         return {"hata": "Zaten eklenmis veya bir sorun var", "detay": str(e)}
-
-    
-
-
-    

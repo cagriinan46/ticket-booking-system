@@ -54,54 +54,63 @@ function Login() {
   };
 
   return (
-    <div className="flex items-center justify-center mt-12">
-      <div className="bg-white p-8 rounded border border-gray-300 shadow-sm w-full max-w-md">
-        <h2 className="text-2xl font-bold mb-6 text-gray-800 text-center border-b border-gray-200 pb-4">
-          {isLogin ? 'Sisteme Giriş' : 'Yeni Kayıt'}
+    <div className="flex items-center justify-center mt-12 mb-20 px-4">
+      <div className="bg-white p-8 md:p-10 rounded-3xl border border-orange-100 shadow-xl shadow-orange-900/5 w-full max-w-md relative overflow-hidden">
+        
+        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-orange-400 to-amber-400"></div>
+
+        <h2 className="text-3xl font-extrabold mb-8 text-gray-900 text-center tracking-tight">
+          {isLogin ? 'Hoş Geldiniz' : 'Aramıza Katılın'}
         </h2>
         
-        <form className="space-y-4">
+        <form className="space-y-5">
           {!isLogin && (
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-1">Ad Soyad</label>
-              <input type="text" className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500" />
+              <label className="block text-sm font-bold text-gray-700 mb-2">Ad Soyad</label>
+              <input 
+                type="text" 
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800" 
+              />
             </div>
           )}
           <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">E-posta</label>
+            <label className="block text-sm font-bold text-gray-700 mb-2">E-posta</label>
             <input 
               type="email" 
               value={email}
               onChange={(e) => setEmail(e.target.value)} 
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500" 
+              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800"
             />
           </div>
           <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">Şifre</label>
+            <label className="block text-sm font-bold text-gray-700 mb-2">Şifre</label>
             <input 
               type="password" 
               value={password}
               onChange={(e) => setPassword(e.target.value)} 
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500" 
+              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800" 
             />
           </div>
 
           <button 
             type="button" 
             onClick={handleAuth}
-            className="w-full bg-blue-600 text-white font-bold py-2 rounded hover:bg-blue-700 mt-4"
+            className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white font-extrabold py-3.5 rounded-xl hover:shadow-lg hover:-translate-y-0.5 hover:from-orange-600 hover:to-amber-600 transition-all duration-300 mt-6 text-lg"
           >
             {isLogin ? 'Giriş Yap' : 'Kayıt Ol'}
           </button>
         </form>
 
-        <div className="mt-6 text-center text-sm text-gray-600">
+        <div className="mt-8 pt-6 border-t border-gray-100 text-center">
+          <p className="text-sm text-gray-500 mb-2">
+            {isLogin ? 'Henüz biletini almadın mı?' : 'Zaten bir hesabın var mı?'}
+          </p>
           <button 
             type="button" 
             onClick={() => setIsLogin(!isLogin)} 
-            className="text-blue-600 hover:underline font-bold"
+            className="text-orange-600 hover:text-orange-700 font-extrabold text-sm hover:underline transition-colors"
           >
-            {isLogin ? 'Hesabınız yok mu? Kayıt olun' : 'Zaten hesabınız var mı? Giriş yapın'}
+            {isLogin ? 'Hemen Ücretsiz Kayıt Ol' : 'Buradan Giriş Yap'}
           </button>
         </div>
       </div>

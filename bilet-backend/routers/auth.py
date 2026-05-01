@@ -32,13 +32,21 @@ router = APIRouter(
 )
 
 class UserRegister(BaseModel):
+    name: str
     email: str
     password: str
+
+class ProfileUpdate(BaseModel):
+    name: str
+
+class PasswordUpdate(BaseModel):
+    current_password: str
+    new_password: str
 
 @router.post("/register")
 def register(user: UserRegister, db: Session = Depends(get_db)):
     hashedPassword = pwd_context.hash(user.password[:72])
-    newUser = models.User(email= user.email, password= hashedPassword)
+    newUser = models.User(name= user.name, email= user.email, password= hashedPassword)
     db.add(newUser)
     db.commit()
     return {"mesaj": f"{user.email} adresiyle kayit islemi basariyla yapildi."}
@@ -72,9 +80,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     return user
 
-@router.get("/me")
+@router.get("/users/me")
 def get_my_profile(current_user: models.User = Depends(get_current_user)):
-    return {"mesaj": f"Current User: {current_user.email}"}
+    return {
+        "name": current_user.name,
+        "email": current_user.email
+    }
 
 @router.get("/make-admin/{email}")
 def make_admin(email: str, db: Session = Depends(get_db)):
@@ -85,3 +96,24 @@ def make_admin(email: str, db: Session = Depends(get_db)):
     user.is_admin = True
     db.commit()
     return {"mesaj": f"Tebrikler, {email} hesabı başarıyla Admin yapıldı!"}
+
+@router.put("/users/me/profile")
+def update_profile(profile: ProfileUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    current_user.name = profile.name
+    db.commit()
+    db.refresh(current_user)
+
+    return {"mesaj": "Profil basariyla degistirildi!"}
+
+@router.put("/users/me/password")
+def update_password(passwords: PasswordUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    is_password_correct = pwd_context.verify(passwords.current_password[:72], current_user.password)
+
+    if not is_password_correct:
+        raise HTTPException(status_code=400, detail="Mevcut sifreniz yanlis!")
+    
+    current_user.password = pwd_context.hash(passwords.new_password[:72])
+    
+    db.commit()
+
+    return {"mesaj": "Sifreniz basariyla degistirildi!"}
