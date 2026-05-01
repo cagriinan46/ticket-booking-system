@@ -135,7 +135,7 @@ function Admin() {
 
             <div>
               <label className="block text-sm font-bold text-gray-700 mb-2">Saat</label>
-              <input type="text" required value={time} onChange={e => setTime(e.target.value)} className="w-full px-5 py-3.5 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800" placeholder='14:00' maxLength="5"/>
+              <input type="text" required value={time} onChange={e => setTime(e.target.value)} className="w-full px-5 py-3.5 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800" placeholder='14.00' maxLength="5"/>
             </div>
 
             <div>

@@ -109,6 +109,44 @@ def get_all_events(db: Session = Depends(get_db)):
 
     return events
 
+@router.get("/my-reviews")
+def get_my_reviews(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    my_reviews = db.query(models.Review).filter(models.Review.user_id == current_user.id).all()
+    return my_reviews
+
+@router.get("/my-tickets", response_model=list[TicketResponse])
+def get_my_tickets(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    my_tickets = db.query(models.Ticket).filter(models.Ticket.user_id == current_user.id).all()
+    return my_tickets
+
+@router.post("/ticket-transfer")
+def ticket_transfer(payload: TicketTransferSchema, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    db_ticket = db.query(models.Ticket).filter(models.Ticket.id == payload.id).first()
+    
+    if not db_ticket:
+        raise HTTPException(status_code=404, detail="Bilet bulunamadi!")
+        
+    if db_ticket.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Sadece kendi biletlerinizi transfer edebilirsiniz!")
+
+    target_user = db.query(models.User).filter(models.User.email == payload.target_email).first()
+    
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Bu e-posta adresine sahip bir kullanici bulunamadi!")
+        
+    if target_user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Bilet zaten size ait!")
+
+    db_ticket.user_id = target_user.id
+    db.commit()
+    db.refresh(db_ticket)
+    
+    return {"mesaj": "Bilet basariyla transfer edildi!"}
+
+@router.get("/my-favorites")
+def get_my_favorites(current_user: models.User = Depends(get_current_user)):
+    return current_user.favorite_events
+
 @router.get("/{event_id}", response_model=EventSchema)
 def get_single_event(event_id: int, db: Session = Depends(get_db)):
     event = db.query(models.Event).filter(models.Event.id == event_id).first()
@@ -218,11 +256,6 @@ def buy_ticket(event_id: int, payment_data: PaymentRequest, db: Session = Depend
 
     return {"mesaj": f"Ödeme başarıyla alındı, {current_user.email} adlı kullanıcı {event.title} etkinliğine başarıyla bilet aldı!"}
 
-@router.get("/my-tickets", response_model=list[TicketResponse])
-def get_my_tickets(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    my_tickets = db.query(models.Ticket).filter(models.Ticket.user_id == current_user.id).all()
-    return my_tickets
-
 @router.delete("/{event_id}")
 def delete_event(event_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.is_admin:
@@ -239,30 +272,6 @@ def delete_event(event_id: int, current_user: models.User = Depends(get_current_
     db.commit()
 
     return {"mesaj": "Etkinlik basariyla silindi!"}
-
-@router.post("/ticket-transfer")
-def ticket_transfer(payload: TicketTransferSchema, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    db_ticket = db.query(models.Ticket).filter(models.Ticket.id == payload.id).first()
-    
-    if not db_ticket:
-        raise HTTPException(status_code=404, detail="Bilet bulunamadi!")
-        
-    if db_ticket.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Sadece kendi biletlerinizi transfer edebilirsiniz!")
-
-    target_user = db.query(models.User).filter(models.User.email == payload.target_email).first()
-    
-    if not target_user:
-        raise HTTPException(status_code=404, detail="Bu e-posta adresine sahip bir kullanici bulunamadi!")
-        
-    if target_user.id == current_user.id:
-        raise HTTPException(status_code=400, detail="Bilet zaten size ait!")
-
-    db_ticket.user_id = target_user.id
-    db.commit()
-    db.refresh(db_ticket)
-    
-    return {"mesaj": "Bilet basariyla transfer edildi!"}
 
 @router.post("/toggle-favorite/{event_id}")
 def toggle_favorite(event_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -285,12 +294,8 @@ def toggle_favorite(event_id: int, db: Session = Depends(get_db), current_user: 
         return {"mesaj": "Etkinlik favorilere eklendi!", "status": "added"}
     else:
         return {"mesaj": "Etkinlik favorilerden cikarildi!", "status": "removed"}
-    
-@router.get("/my-favorites")
-def get_my_favorites(current_user: models.User = Depends(get_current_user)):
-    return current_user.favorite_events
 
-@router.post("/events/{event_id}/reviews")
+@router.post("/{event_id}/reviews")
 def create_review(event_id: int, review: ReviewCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
 
@@ -325,15 +330,10 @@ def create_review(event_id: int, review: ReviewCreate, db: Session = Depends(get
 
     return {"mesaj": "Degerlendirmeniz basariyla eklendi!"}
 
-@router.get("/events/{event_id}/reviews")
+@router.get("/{event_id}/reviews")
 def get_all_reviews(event_id: int, db: Session = Depends(get_db)):
     all_reviews = db.query(models.Review).filter(models.Review.event_id == event_id).all()
     return all_reviews
-
-@router.get("/my-reviews")
-def get_my_reviews(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    my_reviews = db.query(models.Review).filter(models.Review.user_id == current_user.id).all()
-    return my_reviews
 
 @router.get("/{id}/calendar")
 def calendar(id: int, db: Session = Depends(get_db)):
@@ -376,7 +376,7 @@ def get_event_weather(event_id: int, db: Session = Depends(get_db)):
     if days_diff < 0:
         return {"status": "unavailable", "message": "Etkinligin gunu gecmis."}
     elif days_diff > 5:
-        return {"status": "unavailable", "message": "Tahmin icin erken."}
+        return {"status": "unavailable", "message": "Tahmin için erken."}
     else:
         api_key = os.getenv("OPENWEATHER_API_KEY")
         city = event.city

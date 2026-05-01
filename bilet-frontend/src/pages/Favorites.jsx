@@ -16,7 +16,7 @@ function Favorites() {
       return;
     }
 
-    fetch(`${backendUrl}/api/my-favorites`, {
+    fetch(`${backendUrl}/api/events/my-favorites`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => {

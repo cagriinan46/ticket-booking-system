@@ -57,7 +57,7 @@ function Profile() {
     const token = localStorage.getItem('token');
 
     try {
-      const res = await fetch(`${backendUrl}/api/auth/users/me/profile`, {
+      const res = await fetch(`${backendUrl}/api/auth/me/profile`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -89,7 +89,7 @@ function Profile() {
     const token = localStorage.getItem('token');
     
     try {
-      const res = await fetch(`${backendUrl}/api/auth/users/mepassword`, {
+      const res = await fetch(`${backendUrl}/api/auth/me/password`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

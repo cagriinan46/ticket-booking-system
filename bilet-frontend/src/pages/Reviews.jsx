@@ -15,7 +15,7 @@ function Reviews() {
       return;
     }
 
-    fetch(`${backendUrl}/api/my-reviews`, {
+    fetch(`${backendUrl}/api/events/my-reviews`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`

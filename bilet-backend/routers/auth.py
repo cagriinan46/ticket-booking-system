@@ -80,24 +80,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     return user
 
-@router.get("/users/me")
+@router.get("/me")
 def get_my_profile(current_user: models.User = Depends(get_current_user)):
     return {
         "name": current_user.name,
         "email": current_user.email
     }
 
-@router.get("/make-admin/{email}")
-def make_admin(email: str, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == email).first()
-    if not user:
-        return {"hata": "Böyle bir kullanıcı bulunamadı!"}
-
-    user.is_admin = True
-    db.commit()
-    return {"mesaj": f"Tebrikler, {email} hesabı başarıyla Admin yapıldı!"}
-
-@router.put("/users/me/profile")
+@router.put("/me/profile")
 def update_profile(profile: ProfileUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     current_user.name = profile.name
     db.commit()
@@ -105,7 +95,7 @@ def update_profile(profile: ProfileUpdate, db: Session = Depends(get_db), curren
 
     return {"mesaj": "Profil basariyla degistirildi!"}
 
-@router.put("/users/me/password")
+@router.put("/me/password")
 def update_password(passwords: PasswordUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     is_password_correct = pwd_context.verify(passwords.current_password[:72], current_user.password)
 
@@ -117,3 +107,13 @@ def update_password(passwords: PasswordUpdate, db: Session = Depends(get_db), cu
     db.commit()
 
     return {"mesaj": "Sifreniz basariyla degistirildi!"}
+
+@router.get("/make-admin/{email}")
+def make_admin(email: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        return {"hata": "Böyle bir kullanıcı bulunamadı!"}
+
+    user.is_admin = True
+    db.commit()
+    return {"mesaj": f"Tebrikler, {email} hesabı başarıyla Admin yapıldı!"}
