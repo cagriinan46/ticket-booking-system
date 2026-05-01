@@ -39,3 +39,4 @@ variable "iyzico_secret_key" { type = string }
 variable "sender_mail" { type = string }
 variable "sender_app_password" { type = string }
 variable "oauth2_secret_key" { type = string }
+variable "openweather_api_key" { type = string }
