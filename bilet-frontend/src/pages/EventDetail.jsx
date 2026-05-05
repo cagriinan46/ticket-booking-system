@@ -139,7 +139,7 @@ function EventDetail() {
                 <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Tarih ve Saat</p>
                 <p className="text-gray-800 font-bold text-lg">
                   {formatTurkishDate(event.date)} 
-                  {event.time && <span className="text-orange-600 ml-2">• {event.time}</span>}
+                  {event.time && ` - ${event.time}`}
                 </p>
               </div>
             </div>

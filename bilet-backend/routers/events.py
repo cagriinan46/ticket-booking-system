@@ -115,6 +115,7 @@ def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
             
         params = json.loads(raw_text)
     except Exception as e:
+        print("ai hata detay:" f"{e}")
         raise HTTPException(status_code=400, detail="Yapay zeka bu cümleyi anlayamadı. Lütfen daha net yazın.")
 
     query = db.query(models.Event)

@@ -58,7 +58,7 @@ function EventCard({ event, isFavorite, onToggleFavorite }) {
           </svg>
           <span className="truncate">
             {formatTurkishDate(event.date)} 
-            {event.time && <span className="ml-1 font-extrabold text-gray-700">({event.time})</span>}
+            {event.time && ` - ${event.time}`}
           </span>
           <span className="mx-2 text-gray-300">|</span> 
           <span className="truncate">{event.location}</span>

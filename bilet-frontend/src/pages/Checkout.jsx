@@ -14,6 +14,17 @@ function Checkout() {
   const [cvc, setCvc] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
+  const formatTurkishDate = (dateString) => {
+    const date = new Date(dateString);
+    if (isNaN(date)) return dateString; 
+    
+    const day = date.getDate();
+    const month = date.toLocaleDateString('tr-TR', { month: 'long' });
+    const weekday = date.toLocaleDateString('tr-TR', { weekday: 'long' });
+
+    return `${day} ${month}, ${weekday}`;
+  };
+
   if (!event) return <Navigate to="/" />;
 
   const handleNameChange = (e) => {
@@ -160,8 +171,8 @@ function Checkout() {
                 <svg className="w-4 h-4 text-orange-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
-                {event.date}
-                {event.time && <span className="ml-1 text-gray-700 font-extrabold">- {event.time}</span>}
+                {formatTurkishDate(event.date)}
+                {event.time && ` - ${event.time}`}
               </p>
             </div>
             
