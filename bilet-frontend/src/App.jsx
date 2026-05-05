@@ -11,6 +11,7 @@ import About from './pages/About';
 import Reviews from './pages/Reviews';
 import Favorites from './pages/Favorites';
 import Profile from './pages/Profile';
+import Settings from './pages/Settings';
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
           <Route path="/reviews" element={<Reviews />} />
           <Route path="/favorites" element={<Favorites />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
     </Router>

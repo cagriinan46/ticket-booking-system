@@ -171,7 +171,7 @@ function Home() {
                 
                 {isCriticalStock && (
                   <div className="absolute -top-3 -right-3 z-20 bg-red-500 text-white font-black text-xs px-4 py-2 rounded-full shadow-lg border-2 border-white animate-pulse">
-                    🔥 Son {event.available_tickets} Bilet!
+                    Son {event.available_tickets} Bilet!
                   </div>
                 )}
 

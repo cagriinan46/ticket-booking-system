@@ -164,7 +164,7 @@ function EventDetail() {
                 <svg className="w-6 h-6 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
                 </svg>
-                <span className="text-[10px] font-extrabold uppercase tracking-widest">Yol Tarifi</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest">YOL TARİFİ</span>
               </a>
             </div>
 
@@ -282,24 +282,21 @@ function EventDetail() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {reviews.map((review) => (
-              <div key={review.id} className="bg-gray-50 p-5 rounded-2xl border border-gray-100 flex gap-4 items-start">
-                <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center font-black text-lg shrink-0">
-                  {review.user?.name ? review.user.name.charAt(0).toUpperCase() : 'U'}
+              <div key={review.id} className="bg-gray-50 p-5 rounded-2xl border border-gray-100 flex flex-col items-start">
+                
+                <div className="flex justify-between items-center w-full mb-1">
+                  <span className="font-extrabold text-gray-900">{review.user?.name || 'Gizli Kullanıcı'}</span>
+                  {renderStars(review.rating)}
                 </div>
                 
-                <div className="flex-grow">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="font-extrabold text-gray-900">{review.user?.name || 'Gizli Kullanıcı'}</span>
-                    {renderStars(review.rating)}
-                  </div>
-                  {review.comment ? (
-                    <p className="text-gray-600 text-sm mt-2 leading-relaxed">
-                      "{review.comment}"
-                    </p>
-                  ) : (
-                    <p className="text-gray-400 text-sm mt-2 italic">Yazılı yorum bırakılmamış.</p>
-                  )}
-                </div>
+                {review.comment ? (
+                  <p className="text-gray-600 text-sm mt-2 leading-relaxed w-full">
+                    "{review.comment}"
+                  </p>
+                ) : (
+                  <p className="text-gray-400 text-sm mt-2 italic w-full">Yazılı yorum bırakılmamış.</p>
+                )}
+                
               </div>
             ))}
           </div>

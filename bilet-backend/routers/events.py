@@ -9,6 +9,7 @@ from typing import Optional
 from sqlalchemy import text
 from datetime import datetime
 from sqlalchemy.orm import joinedload
+import google.generativeai as genai
 import models
 import iyzipay
 import boto3
@@ -16,16 +17,20 @@ import json
 import os
 import requests
 
-
 load_dotenv()
 
 sqs = boto3.client('sqs', region_name='eu-central-1')
 SQS_QUEUE_URL = os.getenv("SQS_URL")
 
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
 router = APIRouter(
     prefix="/api/events",
     tags=["Events"]
 )
+
+class AISearchRequest(BaseModel):
+    prompt: str
 
 class EventCreate(BaseModel):
     title: str
@@ -81,6 +86,58 @@ class ReviewCreate(BaseModel):
     rating: int = Field(..., ge=1, le=5, description="a score between 1 and 5")
     comment: Optional[str] = None
 
+@router.post("/ai-search")
+def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    system_prompt = """
+    Sen bir etkinlik arama asistanısın. Kullanıcının girdiği metinden etkinlik filtreleme parametrelerini çıkar.
+    SADECE JSON FORMATINDA ÇIKTI VER. BAŞKA HİÇBİR METİN VEYA AÇIKLAMA YAZMA. Markdown kullanma.
+    Format şu şekilde olmalı:
+    {
+        "city": "Şehir adı veya bulamazsan null",
+        "category": "Konser, Tiyatro, Festival, Stand-up, Spor veya bulamazsan null",
+        "start_date": "YYYY-MM-DD formatında başlangıç tarihi veya null",
+        "end_date": "YYYY-MM-DD formatında bitiş tarihi veya null"
+    }
+    İçinde bulunduğumuz yıl: 2026. Ay: Mayıs.
+    """
+    
+    try:
+        response = model.generate_content(system_prompt + "\nKullanıcı Mesajı: " + request.prompt)
+        raw_text = response.text.strip()
+        
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:-3]
+        elif raw_text.startswith("```"):
+            raw_text = raw_text[3:-3]
+            
+        params = json.loads(raw_text)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Yapay zeka bu cümleyi anlayamadı. Lütfen daha net yazın.")
+
+    query = db.query(models.Event)
+    
+    if params.get("city"):
+        query = query.filter(models.Event.city.ilike(f"%{params['city']}%"))
+    if params.get("category"):
+        query = query.filter(models.Event.category.ilike(f"%{params['category']}%"))
+    if params.get("start_date"):
+        query = query.filter(models.Event.date >= params["start_date"])
+    if params.get("end_date"):
+        query = query.filter(models.Event.date <= params["end_date"])
+        
+    ai_events = query.all()
+    
+    for event in ai_events:
+        sold_count = db.query(models.Ticket).filter(models.Ticket.event_id == event.id).count()
+        event.available_tickets = event.capacity - sold_count
+
+    return {
+        "filters_applied": params,
+        "events": ai_events
+    }
+
 @router.post("/")
 def create_event(event: EventCreate, db: Session = Depends(get_db)):
     new_model = models.Event(
@@ -112,7 +169,7 @@ def get_all_events(db: Session = Depends(get_db)):
 
 @router.get("/my-reviews")
 def get_my_reviews(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    my_reviews = db.query(models.Review).filter(models.Review.user_id == current_user.id).all()
+    my_reviews = db.query(models.Review).options(joinedload(models.Review.event)).filter(models.Review.user_id == current_user.id).all()
     return my_reviews
 
 @router.get("/my-tickets", response_model=list[TicketResponse])
@@ -339,7 +396,7 @@ def create_review(event_id: int, review: ReviewCreate, db: Session = Depends(get
 
 @router.get("/{event_id}/reviews")
 def get_all_reviews(event_id: int, db: Session = Depends(get_db)):
-    all_reviews = db.query(models.Review).filter(models.Review.event_id == event_id).all()
+    all_reviews = db.query(models.Review).options(joinedload(models.Review.user)).filter(models.Review.event_id == event_id).all()
     return all_reviews
 
 @router.get("/{id}/calendar")

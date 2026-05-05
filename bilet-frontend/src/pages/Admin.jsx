@@ -13,6 +13,7 @@ function Admin() {
   const [events, setEvents] = useState([]);
   const [city, setCity] = useState('İstanbul');
   const [category, setCategory] = useState('Konser');
+  const [capacity, setCapacity] = useState(''); 
 
   const cities = [
     "İstanbul", "Ankara", "İzmir", "Adana", "Adıyaman", "Afyonkarahisar", "Ağrı", "Aksaray", "Amasya", "Antalya", "Ardahan", "Artvin", "Aydın", "Balıkesir", "Bartın", "Batman", "Bayburt", "Bilecik", "Bingöl", "Bitlis", "Bolu", "Burdur", "Bursa", "Çanakkale", "Çankırı", "Çorum", "Denizli", "Diyarbakır", "Düzce", "Edirne", "Elazığ", "Erzincan", "Erzurum", "Eskişehir", "Gaziantep", "Giresun", "Gümüşhane", "Hakkari", "Hatay", "Iğdır", "Isparta", "Kahramanmaraş", "Karabük", "Karaman", "Kars", "Kastamonu", "Kayseri", "Kırıkkale", "Kırklareli", "Kırşehir", "Kilis", "Kocaeli", "Konya", "Kütahya", "Malatya", "Manisa", "Mardin", "Mersin", "Muğla", "Muş", "Nevşehir", "Niğde", "Ordu", "Osmaniye", "Rize", "Sakarya", "Samsun", "Siirt", "Sinop", "Sivas", "Şanlıurfa", "Şırnak", "Tekirdağ", "Tokat", "Trabzon", "Tunceli", "Uşak", "Van", "Yalova", "Yozgat", "Zonguldak"
@@ -62,7 +63,7 @@ function Admin() {
           image: image,
           city: city,
           category: category,
-          capacity: 500
+          capacity: parseInt(capacity, 10) 
         })
       });
 
@@ -70,7 +71,7 @@ function Admin() {
 
       toast.success('Etkinlik başarıyla eklendi!');
       
-      setTitle(''); setDate(''); setTime(''); setLocation(''); setPrice(''); setDescription(''); setImage('');
+      setTitle(''); setDate(''); setTime(''); setLocation(''); setPrice(''); setDescription(''); setImage(''); setCapacity('');
       
       fetchEvents();
       
@@ -157,10 +158,16 @@ function Admin() {
             </div>
 
             <div>
+              <label className="block text-sm font-bold text-gray-700 mb-2">Kapasite</label>
+              <input type="number" min="1" required value={capacity} onChange={e => setCapacity(e.target.value)} className="w-full px-5 py-3.5 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800"/>
+            </div>
+
+            <div>
               <label className="block text-sm font-bold text-gray-700 mb-2">Bilet Fiyatı (TL)</label>
               <input type="number" required value={price} onChange={e => setPrice(e.target.value)} className="w-full px-5 py-3.5 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800"/>
             </div>
-            <div>
+            
+            <div className="md:col-span-2">
               <label className="block text-sm font-bold text-gray-700 mb-2">Görsel URL</label>
               <input type="url" required value={image} onChange={e => setImage(e.target.value)} className="w-full px-5 py-3.5 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800"/>
             </div>

@@ -84,9 +84,9 @@ function Reviews() {
             
             <div className="flex flex-col sm:flex-row gap-4 justify-between items-start">
               <div className="flex-grow">
-                <Link to={`/event/${review.event_id}`} className="inline-block text-lg font-extrabold text-gray-900 hover:text-amber-600 transition-colors mb-2">
+                <span className="inline-block text-lg font-extrabold text-gray-900 mb-2 cursor-default">
                   {review.event?.title || `Etkinlik #${review.event_id}`}
-                </Link>
+                </span>
                 
                 {renderStars(review.rating)}
                 
