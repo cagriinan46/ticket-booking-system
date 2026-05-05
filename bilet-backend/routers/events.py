@@ -9,7 +9,7 @@ from typing import Optional
 from sqlalchemy import text
 from datetime import datetime
 from sqlalchemy.orm import joinedload
-import google.generativeai as genai
+from google import genai
 import models
 import iyzipay
 import boto3
@@ -22,7 +22,7 @@ load_dotenv()
 sqs = boto3.client('sqs', region_name='eu-central-1')
 SQS_QUEUE_URL = os.getenv("SQS_URL")
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 router = APIRouter(
     prefix="/api/events",
@@ -104,7 +104,10 @@ def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
     """
     
     try:
-        response = model.generate_content(system_prompt + "\nKullanıcı Mesajı: " + request.prompt)
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=system_prompt + "\nKullanıcı Mesajı: " + request.prompt
+        )
         raw_text = response.text.strip()
         
         if raw_text.startswith("```json"):

@@ -6,7 +6,7 @@ boto3
 botocore
 click
 fastapi
-google-generativeai
+google-genai
 h11
 idna
 iyzipay
