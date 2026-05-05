@@ -22,8 +22,6 @@ load_dotenv()
 sqs = boto3.client('sqs', region_name='eu-central-1')
 SQS_QUEUE_URL = os.getenv("SQS_URL")
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
 router = APIRouter(
     prefix="/api/events",
     tags=["Events"]
@@ -88,7 +86,7 @@ class ReviewCreate(BaseModel):
 
 @router.post("/ai-search")
 def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     
     system_prompt = """
     Sen bir etkinlik arama asistanısın. Kullanıcının girdiği metinden etkinlik filtreleme parametrelerini çıkar.
