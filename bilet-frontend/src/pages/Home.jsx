@@ -47,7 +47,7 @@ function Home() {
     fetchEventsAndFavorites();
   }, []);
 
-  const handleToggleFavorite = async (eventId) => {
+const handleToggleFavorite = async (eventId) => {
     const token = localStorage.getItem('token');
     if (!token) {
       toast.error("Favorilere eklemek için önce giriş yapmalısınız!");
@@ -73,25 +73,45 @@ function Home() {
         throw new Error(data.detail);
       }
       
-      toast.success(data.message);
+      if (data.status === "removed") {
+        toast.success("Favorilerden çıkarıldı", { icon: '💔' });
+      } else {
+        toast.success("Favorilere eklendi", { icon: '❤️' });
+      }
+
     } catch (err) {
       toast.error(err.message);
     }
   };
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const now = new Date();
 
   const filteredEvents = events.filter(event => {
-    const matchSearch = event.title.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchCity = selectedCity === 'Tümü' || event.city === selectedCity;
-    const matchCategory = selectedCategory === 'Tümü' || event.category === selectedCategory;
-    
-    const eventDate = new Date(event.date);
-    const isUpcoming = eventDate >= today;
-    
-    return matchSearch && matchCity && matchCategory && isUpcoming;
-  });
+      const matchSearch = event.title.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchCity = selectedCity === 'Tümü' || event.city === selectedCity;
+      const matchCategory = selectedCategory === 'Tümü' || event.category === selectedCategory;
+      
+      let year = 2026, month = 0, day = 1;
+      if (event.date) {
+        const dateParts = event.date.split('-');
+        year = parseInt(dateParts[0], 10);
+        month = parseInt(dateParts[1], 10) - 1;
+        day = parseInt(dateParts[2], 10);
+      }
+
+      let hour = 0, minute = 0;
+      if (event.time) {
+        const timeParts = event.time.split(/[.:]/);
+        hour = parseInt(timeParts[0], 10) || 0;
+        minute = parseInt(timeParts[1], 10) || 0;
+      }
+
+      const eventDateTime = new Date(year, month, day, hour, minute);
+      
+      const isUpcoming = eventDateTime > now;
+      
+      return matchSearch && matchCity && matchCategory && isUpcoming;
+    });
 
   return (
     <div className="px-2 md:px-0">

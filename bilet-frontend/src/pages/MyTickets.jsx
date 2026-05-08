@@ -312,11 +312,6 @@ function MyTickets() {
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
             <div className="text-center mb-6 mt-2">
-              <div className="w-16 h-16 bg-orange-50 text-orange-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              </div>
               <h3 className="text-xl font-extrabold text-gray-900">Bilet Transferi</h3>
               <p className="text-xs font-bold text-gray-500 mt-2 bg-gray-50 p-2 rounded-lg inline-block border border-gray-100">
                 {transferTicket.event.title} <br/> <span className="text-orange-500 font-mono">#{transferTicket.id}</span>
@@ -331,7 +326,7 @@ function MyTickets() {
                   value={targetEmail}
                   onChange={(e) => setTargetEmail(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-all text-gray-800"
-                  placeholder="arkadasin@mail.com"
+                  placeholder="ornek@mail.com"
                 />
               </div>
               <button type="submit" disabled={isTransferring} className={`w-full text-white font-extrabold py-3.5 rounded-xl shadow-md transition-all duration-300 ${isTransferring ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-amber-500 hover:shadow-lg hover:-translate-y-0.5 hover:from-orange-600 hover:to-amber-600'}`}>

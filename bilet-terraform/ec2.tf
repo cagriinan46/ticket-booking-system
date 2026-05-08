@@ -61,6 +61,7 @@ resource "aws_instance" "producer_api" {
   SENDER_APP_PASSWORD="${var.sender_app_password}"
   OAUTH2_SECRET_KEY="${var.oauth2_secret_key}"
   OPENWEATHER_API_KEY="${var.openweather_api_key}"
+  GEMINI_API_KEY="${var.gemini_api_key}
   EOT
 
   cat <<'EOT' > /etc/systemd/system/ticket-producer.service
@@ -119,6 +120,7 @@ resource "aws_instance" "consumer_worker" {
   SENDER_APP_PASSWORD="${var.sender_app_password}"
   OAUTH2_SECRET_KEY="${var.oauth2_secret_key}"
   OPENWEATHER_API_KEY="${var.openweather_api_key}"
+  GEMINI_API_KEY="${var.gemini_api_key}
   EOT
 
   cat <<'EOT' > /etc/systemd/system/ticket-consumer.service

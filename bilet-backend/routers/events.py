@@ -103,7 +103,7 @@ def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
     
     try:
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-3-flash',
             contents=system_prompt + "\nKullanıcı Mesajı: " + request.prompt
         )
         raw_text = response.text.strip()

@@ -43,6 +43,12 @@ class PasswordUpdate(BaseModel):
     current_password: str
     new_password: str
 
+class DeleteAccountRequest(BaseModel):
+    email: str
+
+class EmailNotifRequest(BaseModel):
+    email_notifications: bool
+
 @router.post("/register")
 def register(user: UserRegister, db: Session = Depends(get_db)):
     hashedPassword = pwd_context.hash(user.password[:72])
@@ -107,6 +113,25 @@ def update_password(passwords: PasswordUpdate, db: Session = Depends(get_db), cu
     db.commit()
 
     return {"mesaj": "Sifreniz basariyla degistirildi!"}
+
+@router.delete("/delete-account")
+def delete_account(request: DeleteAccountRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.email != request.email:
+        raise HTTPException(status_code=400, detail="Girdiğiniz e-posta adresi hesabınızla uyuşmuyor!")
+    
+    db.delete(current_user)
+    db.commit()
+
+    return {"mesaj": "Hesap başarıyla silindi."}
+
+@router.put("/email-notifications")
+def update_email_notif(request: EmailNotifRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    current_user.email_notifications = request.email_notifications
+
+    db.commit()
+
+    return {"mesaj": "Email bildirim ayarı başarıyla güncellendi."}
+    
 
 @router.get("/make-admin/{email}")
 def make_admin(email: str, db: Session = Depends(get_db)):

@@ -15,6 +15,7 @@ class User(Base):
     name = Column(String, nullable=True)
     email = Column(String, unique= True)
     password = Column(String)
+    email_notifications = Column(Boolean, default=True)
 
     is_admin = Column(Boolean, default=False)
 

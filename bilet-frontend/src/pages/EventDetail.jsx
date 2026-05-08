@@ -236,7 +236,7 @@ function EventDetail() {
             
             {event.available_tickets > 0 && event.available_tickets <= 10 && (
               <div className="mb-4 bg-red-50 border border-red-200 text-red-600 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 animate-pulse">
-                <span>🔥</span> Son {event.available_tickets} bilet!
+                Biletler tükeniyor, son {event.available_tickets} bilet!
               </div>
             )}
 
