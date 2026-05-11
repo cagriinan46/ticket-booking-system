@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import EventCard from '../components/EventCard';
 
 function EventDetail() {
   const backendUrl = import.meta.env.VITE_API_URL;
@@ -11,9 +12,12 @@ function EventDetail() {
   const [loading, setLoading] = useState(true);
   const [reviews, setReviews] = useState([]);
   const [reviewsLoading, setReviewsLoading] = useState(true);
-  
   const [weather, setWeather] = useState(null);
   const [weatherLoading, setWeatherLoading] = useState(true);
+  
+  const [recommendations, setRecommendations] = useState([]);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(true);
+  const [favoriteIds, setFavoriteIds] = useState([]);
 
   const formatTurkishDate = (dateString) => {
     const date = new Date(dateString);
@@ -27,6 +31,9 @@ function EventDetail() {
   };
 
   useEffect(() => {
+    window.scrollTo(0, 0);
+    setLoading(true);
+
     fetch(`${backendUrl}/api/events/${id}`)
       .then(res => {
         if (!res.ok) throw new Error("Etkinlik bulunamadı");
@@ -69,6 +76,33 @@ function EventDetail() {
         console.error("Hava durumu çekilemedi", err);
         setWeatherLoading(false);
       });
+
+    fetch(`${backendUrl}/api/events/${id}/recommendations`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        setRecommendations(data);
+        setRecommendationsLoading(false);
+      })
+      .catch(err => {
+        console.error("Öneriler çekilemedi", err);
+        setRecommendationsLoading(false);
+      });
+
+    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+    if (isLoggedIn) {
+      const token = localStorage.getItem('token');
+      fetch(`${backendUrl}/api/events/my-favorites`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        if (Array.isArray(data)) {
+          setFavoriteIds(data.map(ev => ev.id));
+        }
+      })
+      .catch(err => console.error("Favoriler çekilemedi:", err));
+    }
+
   }, [id, backendUrl]);
 
   const handleBuyClick = () => {
@@ -79,6 +113,38 @@ function EventDetail() {
       return;
     }
     navigate('/checkout', { state: { event } });
+  };
+
+  const handleToggleFavorite = async (eventId) => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error("Favorilere eklemek için önce giriş yapmalısınız!");
+      return;
+    }
+
+    const isCurrentlyFav = favoriteIds.includes(eventId);
+    if (isCurrentlyFav) {
+      setFavoriteIds(favoriteIds.filter(fId => fId !== eventId));
+    } else {
+      setFavoriteIds([...favoriteIds, eventId]);
+    }
+
+    try {
+      const response = await fetch(`${backendUrl}/api/events/toggle-favorite/${eventId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail);
+      
+      if (data.status === "removed") {
+        toast.success("Favorilerden çıkarıldı", { icon: '💔' });
+      } else {
+        toast.success("Favorilere eklendi", { icon: '❤️' });
+      }
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
 
   const renderStars = (rating) => {
@@ -104,7 +170,7 @@ function EventDetail() {
   return (
     <div className="max-w-6xl mx-auto mt-4 mb-20 px-4 md:px-0">
       <Link to="/" className="inline-flex items-center text-orange-500 hover:text-orange-600 font-bold text-sm mb-8 transition-colors">
-        <span className="mr-2 text-lg">&larr;</span> Vitrine Dön
+        <span className="mr-2 text-lg">←</span> Vitrine Dön
       </Link>
       
       <div className="flex flex-col lg:flex-row gap-10 bg-white p-6 md:p-8 rounded-3xl border border-orange-50 shadow-xl shadow-orange-900/5 mb-12">
@@ -156,7 +222,7 @@ function EventDetail() {
               </div>
               
               <a 
-                href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(event.location + ' ' + (event.city || ''))}`}
+                href={`http://googleusercontent.com/maps.google.com/?q=${encodeURIComponent(event.location + ' ' + (event.city || ''))}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex flex-col items-center gap-1 text-blue-500 hover:text-blue-700 transition-colors bg-blue-50 p-2.5 rounded-xl hover:bg-blue-100 border border-blue-100 group"
@@ -262,6 +328,33 @@ function EventDetail() {
         </div>
       </div>
 
+      {!recommendationsLoading && recommendations.length > 0 && (
+        <div className="mb-12">
+          <div className="flex items-center justify-between mb-8 pb-4 border-b border-gray-100">
+            <h3 className="text-2xl font-extrabold text-gray-900 tracking-tight flex items-center gap-2">
+              <svg className="w-6 h-6 text-orange-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+              Bunlar da İlgini Çekebilir
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {recommendations.map(rec => {
+              const eventWithImage = {
+                ...rec,
+                image: rec.image || 'https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=500&q=80'
+              };
+              return (
+                <EventCard 
+                  key={eventWithImage.id} 
+                  event={eventWithImage} 
+                  isFavorite={favoriteIds.includes(eventWithImage.id)}
+                  onToggleFavorite={handleToggleFavorite}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white p-6 md:p-8 rounded-3xl border border-gray-100 shadow-sm">
         <div className="flex items-center justify-between mb-8 pb-4 border-b border-gray-100">
           <h3 className="text-2xl font-extrabold text-gray-900 tracking-tight flex items-center gap-2">
@@ -284,9 +377,20 @@ function EventDetail() {
             {reviews.map((review) => (
               <div key={review.id} className="bg-gray-50 p-5 rounded-2xl border border-gray-100 flex flex-col items-start">
                 
-                <div className="flex justify-between items-center w-full mb-1">
-                  <span className="font-extrabold text-gray-900">{review.user?.name || 'Gizli Kullanıcı'}</span>
-                  {renderStars(review.rating)}
+                <div className="flex justify-between items-start w-full mb-2">
+                  <div className="flex flex-col">
+                    <span className="font-extrabold text-gray-900">{review.user?.name || 'Gizli Kullanıcı'}</span>
+                    
+                    {review.event && (
+                      <span className="text-xs text-gray-400 font-medium mt-0.5 flex items-center gap-1">
+                        📍 {review.event.location} <span className="opacity-50">•</span> {formatTurkishDate(review.event.date).split(',')[0]}
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="mt-1">
+                    {renderStars(review.rating)}
+                  </div>
                 </div>
                 
                 {review.comment ? (

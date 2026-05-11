@@ -398,7 +398,19 @@ def create_review(event_id: int, review: ReviewCreate, db: Session = Depends(get
 
 @router.get("/{event_id}/reviews")
 def get_all_reviews(event_id: int, db: Session = Depends(get_db)):
-    all_reviews = db.query(models.Review).options(joinedload(models.Review.user)).filter(models.Review.event_id == event_id).all()
+    current_event = db.query(models.Event).filter(models.Event.id == event_id).first()
+
+    if not current_event:
+        raise HTTPException(status_code=404, detail="Etkinlik bulunamadi!")
+
+    similar_events = db.query(models.Event).filter(models.Event.title == current_event.title).all()
+    similar_events_ids = [e.id for e in similar_events]
+
+    all_reviews = db.query(models.Event).options(
+        joinedload(models.Review.user),
+        joinedload(models.Review.event)
+    ).filter(models.Review.event_id.in_(similar_events_ids)).all()
+
     return all_reviews
 
 @router.get("/{id}/calendar")
@@ -465,6 +477,24 @@ def get_event_weather(event_id: int, db: Session = Depends(get_db)):
             
         except Exception as e:
             return {"status": "error", "message": f"Hava durumu cekilemedi: {str(e)}"}
+        
+@router.get("/{event_id}/recommendations", response_model=list[EventSchema])
+def get_recommendations(event_id: int, db: Session = Depends(get_db)):
+    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Etkinlik bulunamadi!")
+    
+    recommendations = db.query(models.Event).filter(
+        models.Event.category == event.category,
+        models.Event.id != event_id
+    ).limit(3).all()
+
+    for rec in recommendations:
+        sold_count = db.query(models.Ticket).filter(models.Ticket.event_id == rec.id).count()
+        rec.available_tickets = rec.capacity - sold_count
+
+    return recommendations
 
 # @router.get("/fix-database-columns")
 # def fix_db(db: Session = Depends(get_db)):

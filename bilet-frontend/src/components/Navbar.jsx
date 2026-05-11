@@ -73,7 +73,12 @@ function Navbar() {
 
       setAiEvents(data.events);
       setAiFiltersApplied(data.filters_applied);
-      toast.success("Yapay zeka size uygun etkinlikleri buldu!");
+      
+      if (data.events.length > 0) {
+        toast.success(`Yapay zeka ${data.events.length} etkinlik buldu!`);
+      } else {
+        toast("Bu tarihlere veya kriterlere uygun etkinlik yok.", { icon: '🔍' });
+      }
       
     } catch (err) {
       toast.error(err.message);
