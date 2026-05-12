@@ -119,6 +119,12 @@ def delete_account(request: DeleteAccountRequest, current_user: models.User = De
     if current_user.email != request.email:
         raise HTTPException(status_code=400, detail="Girdiğiniz e-posta adresi hesabınızla uyuşmuyor!")
     
+    db.query(models.Ticket).filter(models.Ticket.user_id == current_user.id).delete(synchronize_session=False)
+    
+    db.query(models.Review).filter(models.Review.user_id == current_user.id).delete(synchronize_session=False)
+    
+    current_user.favorite_events.clear()
+
     db.delete(current_user)
     db.commit()
 

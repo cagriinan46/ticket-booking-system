@@ -62,7 +62,7 @@ def send_ticket_email(receiver_email, event_name, event_id):
 
                 <!-- Buton -->
                 <div style="text-align: center; margin: 40px 0;">
-                    <a href="http://localhost:5173/profile" style="background-color: #f97316; color: #ffffff; text-decoration: none; padding: 14px 30px; border-radius: 8px; font-weight: bold; font-size: 16px; display: inline-block;">
+                    <a href="http://localhost:5173/my-tickets" style="background-color: #f97316; color: #ffffff; text-decoration: none; padding: 14px 30px; border-radius: 8px; font-weight: bold; font-size: 16px; display: inline-block;">
                         Biletlerimi Görüntüle
                     </a>
                 </div>

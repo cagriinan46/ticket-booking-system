@@ -222,7 +222,7 @@ function EventDetail() {
               </div>
               
               <a 
-                href={`http://googleusercontent.com/maps.google.com/?q=${encodeURIComponent(event.location + ' ' + (event.city || ''))}`}
+                href={`https://maps.google.com/?q=${encodeURIComponent(event.location + ' ' + (event.city || ''))}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex flex-col items-center gap-1 text-blue-500 hover:text-blue-700 transition-colors bg-blue-50 p-2.5 rounded-xl hover:bg-blue-100 border border-blue-100 group"

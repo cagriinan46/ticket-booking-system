@@ -22,7 +22,7 @@ function Settings() {
     const token = localStorage.getItem('token');
 
     try {
-      const response = await fetch(`${backendUrl}/api/users/delete-account`, {
+      const response = await fetch(`${backendUrl}/api/auth/delete-account`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',

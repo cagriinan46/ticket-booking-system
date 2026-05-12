@@ -406,7 +406,7 @@ def get_all_reviews(event_id: int, db: Session = Depends(get_db)):
     similar_events = db.query(models.Event).filter(models.Event.title == current_event.title).all()
     similar_events_ids = [e.id for e in similar_events]
 
-    all_reviews = db.query(models.Event).options(
+    all_reviews = db.query(models.Review).options(
         joinedload(models.Review.user),
         joinedload(models.Review.event)
     ).filter(models.Review.event_id.in_(similar_events_ids)).all()
