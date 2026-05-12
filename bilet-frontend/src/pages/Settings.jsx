@@ -37,7 +37,7 @@ function Settings() {
         throw new Error(data.detail || "Hesap silinirken bir hata oluştu.");
       }
 
-      toast.success("Hesabınız kalıcı olarak silindi. Hoşça kalın! 🥺", { duration: 4000 });
+      toast.success("Hesabınız kalıcı olarak silindi!", { duration: 4000 });
       
       localStorage.removeItem('token');
       localStorage.removeItem('isLoggedIn');

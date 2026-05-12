@@ -1,0 +1,12 @@
+config:
+  target: "http://ticket-app-lb-504591307.eu-central-1.elb.amazonaws.com" 
+  phases:
+    - duration: 60 
+      arrivalRate: 20cl
+      rampTo: 50
+      name: "AWS Production Stress Testi"
+scenarios:
+  - name: "API Yüklenmesi"
+    flow:
+      - get:
+          url: "/api/events/"
