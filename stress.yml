@@ -1,8 +1,8 @@
 config:
   target: "http://ticket-app-lb-504591307.eu-central-1.elb.amazonaws.com" 
   phases:
-    - duration: 60 
-      arrivalRate: 20cl
+    - duration: 30 
+      arrivalRate: 20
       rampTo: 50
       name: "AWS Production Stress Testi"
 scenarios:
