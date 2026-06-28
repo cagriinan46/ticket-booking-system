@@ -45,13 +45,13 @@ variable "gemini_api_key" { type = string }
 variable "ollama_model" {
   description = "Ollama model to pull and run"
   type        = string
-  default     = "llama3.2:1b"
+  default     = "qwen2.5:7b"
 }
 
 variable "ollama_instance_type" {
   description = "EC2 instance type for Ollama server"
   type        = string
-  default     = "t3.medium"
+  default     = "t3.large"
 }
 
 variable "app_branch" {

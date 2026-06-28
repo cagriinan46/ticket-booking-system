@@ -99,54 +99,55 @@ def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
     today = date.today().isoformat()
 
     system_prompt = f"""
-Sen bir bilet bulma API'sisin. Bugünün tarihi: {today}.
+        Sen bir etkinlik arama filtresi çıkaran API'sin.
+        Bugünün tarihi: {today}.
 
-Kullanıcının metnini analiz et ve sadece şu 4 filtreyi çıkar:
-- city
-- category
-- start_date
-- end_date
+        Kullanıcı mesajından sadece şu JSON alanlarını çıkar:
+        city, category, start_date, end_date.
 
-Kurallar:
-- "konser" kelimesi geçiyorsa category kesinlikle "Konser" olmalı.
-- "tiyatro" kelimesi geçiyorsa category kesinlikle "Tiyatro" olmalı.
-- "festival" kelimesi geçiyorsa category kesinlikle "Festival" olmalı.
-- "stand-up", "standup" veya "stand up" geçiyorsa category kesinlikle "Stand-up" olmalı.
-- "spor", "maç", "futbol", "basketbol" geçiyorsa category kesinlikle "Spor" olmalı.
+        Kurallar:
+        - Kullanıcı bir alanı açıkça belirtmediyse o alan null olmalı.
+        - Genel ifadeler kategori değildir. Örneğin "herhangi bir etkinlik", "etkinlik var mı", "ne var", "bir şey var mı" ifadelerinde category null olmalı.
+        - category sadece şu değerlerden biri olabilir: Konser, Tiyatro, Festival, Stand-up, Spor.
+        - Kullanıcı açıkça kategori belirtirse category bu değerlerden biri olmalı. Belirtmezse category null olmalı.
+        - Kullanıcı şehir belirtirse city şehir adı olmalı. Belirtmezse city null olmalı.
+        - Tarih varsa start_date ve end_date YYYY-MM-DD formatında olmalı.
+        - Sadece tek tarih varsa start_date ve end_date aynı gün olmalı.
+        - Tarih yoksa start_date ve end_date null olmalı.
+        - Türkçe ay adlarını doğru yorumla.
 
-- Şehir adlarını eklerden temizle:
-  "istanbulda", "istanbul'da", "istanbul için" -> "İstanbul"
-  "ankarada", "ankara'da" -> "Ankara"
-  "izmirde", "izmir'de" -> "İzmir"
+        Örnekler:
+        Kullanıcı: "15 temmuz 15 ağustos arası herhangi bir etkinlik var mı"
+        Cevap: {{"city": null, "category": null, "start_date": "2026-07-15", "end_date": "2026-08-15"}}
 
-- Türkçe ayları doğru yorumla:
-  ocak=01, şubat=02, mart=03, nisan=04, mayıs=05, haziran=06,
-  temmuz=07, ağustos=08, eylül=09, ekim=10, kasım=11, aralık=12.
+        Kullanıcı: "15 temmuz 15 ağustos arası istanbulda konser var mı"
+        Cevap: {{"city": "İstanbul", "category": "Konser", "start_date": "2026-07-15", "end_date": "2026-08-15"}}
 
-- "15 temmuz 15 ağustos arası" ifadesi start_date=2026-07-15, end_date=2026-08-15 anlamına gelir.
-- Tarihleri YYYY-MM-DD formatında hesapla.
-- Eğer bir bilgi yoksa null yap.
-- Asla açıklama yapma. Sadece JSON dön.
-"""
+        Kullanıcı: "konya'da tiyatro var mı"
+        Cevap: {{"city": "Konya", "category": "Tiyatro", "start_date": null, "end_date": null}}
+
+        Sadece JSON dön. Açıklama yazma. Markdown kullanma.
+        """
 
     json_schema = {
-        "type": "object",
-        "properties": {
-            "city": {
-                "type": ["string", "null"]
-            },
-            "category": {
-                "type": ["string", "null"]
-            },
-            "start_date": {
-                "type": ["string", "null"]
-            },
-            "end_date": {
-                "type": ["string", "null"]
-            }
+    "type": "object",
+    "properties": {
+        "city": {
+            "type": ["string", "null"]
         },
-        "required": ["city", "category", "start_date", "end_date"]
-    }
+        "category": {
+            "type": ["string", "null"],
+            "enum": ["Konser", "Tiyatro", "Festival", "Stand-up", "Spor", None]
+        },
+        "start_date": {
+            "type": ["string", "null"]
+        },
+        "end_date": {
+            "type": ["string", "null"]
+        }
+    },
+    "required": ["city", "category", "start_date", "end_date"]
+}
 
     try:
         response = ollama_client.chat(
