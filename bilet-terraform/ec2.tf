@@ -61,7 +61,9 @@ resource "aws_instance" "producer_api" {
   SENDER_APP_PASSWORD="${var.sender_app_password}"
   OAUTH2_SECRET_KEY="${var.oauth2_secret_key}"
   OPENWEATHER_API_KEY="${var.openweather_api_key}"
-  GEMINI_API_KEY="${var.gemini_api_key}
+  GEMINI_API_KEY="${var.gemini_api_key}"
+  OLLAMA_HOST="http://${aws_instance.ollama_server.private_ip}:11434"
+  OLLAMA_MODEL="${var.ollama_model}"
   EOT
 
   cat <<'EOT' > /etc/systemd/system/ticket-producer.service
@@ -120,7 +122,9 @@ resource "aws_instance" "consumer_worker" {
   SENDER_APP_PASSWORD="${var.sender_app_password}"
   OAUTH2_SECRET_KEY="${var.oauth2_secret_key}"
   OPENWEATHER_API_KEY="${var.openweather_api_key}"
-  GEMINI_API_KEY="${var.gemini_api_key}
+  GEMINI_API_KEY="${var.gemini_api_key}"
+  OLLAMA_HOST="http://${aws_instance.ollama_server.private_ip}:11434"
+  OLLAMA_MODEL="${var.ollama_model}"
   EOT
 
   cat <<'EOT' > /etc/systemd/system/ticket-consumer.service
@@ -149,4 +153,43 @@ resource "aws_instance" "consumer_worker" {
   EOF
 
   tags = { Name = "Ticket-Worker-Consumer" }
+}
+
+resource "aws_instance" "ollama_server" {
+  ami                    = "ami-014f11e8c26ed3e15"
+  instance_type          = var.ollama_instance_type
+  subnet_id              = module.vpc.private_subnets[0]
+  vpc_security_group_ids = [aws_security_group.ollama_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
+
+  user_data = <<-EOF
+  #!/bin/bash
+  set -e
+
+  dnf update -y
+  dnf install -y curl
+
+  curl -fsSL https://ollama.com/install.sh | sh
+
+  mkdir -p /etc/systemd/system/ollama.service.d
+
+  cat <<'EOT' > /etc/systemd/system/ollama.service.d/override.conf
+  [Service]
+  Environment="OLLAMA_HOST=0.0.0.0:11434"
+  EOT
+
+  systemctl daemon-reload
+  systemctl enable ollama
+  systemctl restart ollama
+
+  sleep 10
+
+  ollama pull ${var.ollama_model}
+
+  echo "Ollama server hazir! Model: ${var.ollama_model}" > /home/ec2-user/ollama-status.txt
+  EOF
+
+  tags = {
+    Name = "Ticket-Ollama-Server"
+  }
 }

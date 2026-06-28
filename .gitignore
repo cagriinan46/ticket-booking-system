@@ -1,5 +1,6 @@
 .DS_Store
 roadmap/
+stress.yml
 
 # Backend
 __pycache__/

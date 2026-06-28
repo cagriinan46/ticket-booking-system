@@ -9,6 +9,8 @@ from typing import Optional
 from sqlalchemy import text
 from datetime import datetime
 from sqlalchemy.orm import joinedload
+from datetime import date
+from ollama import Client
 import models
 import iyzipay
 import boto3
@@ -84,58 +86,110 @@ class ReviewCreate(BaseModel):
     rating: int = Field(..., ge=1, le=5, description="a score between 1 and 5")
     comment: Optional[str] = None
 
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+
+ollama_client = Client(
+    host=OLLAMA_HOST,
+    timeout=60.0
+)
+
 @router.post("/ai-search")
-def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):    
-    system_prompt = """
-    Sen bir etkinlik arama asistanısın. Kullanıcının girdiği metinden etkinlik filtreleme parametrelerini çıkar.
-    SADECE JSON FORMATINDA ÇIKTI VER. BAŞKA HİÇBİR METİN VEYA AÇIKLAMA YAZMA. Markdown kullanma.
-    Format şu şekilde olmalı:
-    {
-        "city": "Şehir adı veya bulamazsan null",
-        "category": "Konser, Tiyatro, Festival, Stand-up, Spor veya bulamazsan null",
-        "start_date": "YYYY-MM-DD formatında başlangıç tarihi veya null",
-        "end_date": "YYYY-MM-DD formatında bitiş tarihi veya null"
-    }
-    İçinde bulunduğumuz yıl: 2026. Ay: Mayıs.
+def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
+    today = date.today().isoformat()
+
+    system_prompt = f"""
+    Sen bir bilet bulma API'sisin. Bugünün tarihi: {today}.
+
+    Kullanıcının metnini analiz et ve sadece şu 4 filtreyi çıkar:
+    - city
+    - category
+    - start_date
+    - end_date
+
+    Tarihleri YYYY-MM-DD formatında hesapla.
+    Eğer bir bilgi yoksa null yap.
+
+    Kategoriler sadece şunlardan biri olabilir:
+    Konser, Tiyatro, Festival, Stand-up, Spor
+
+    Asla açıklama yapma. Sadece JSON dön.
     """
-    
+
+    json_schema = {
+        "type": "object",
+        "properties": {
+            "city": {
+                "type": ["string", "null"]
+            },
+            "category": {
+                "type": ["string", "null"]
+            },
+            "start_date": {
+                "type": ["string", "null"]
+            },
+            "end_date": {
+                "type": ["string", "null"]
+            }
+        },
+        "required": ["city", "category", "start_date", "end_date"]
+    }
+
     try:
-        response = client.models.generate_content(
-            model='gemini-3-flash-preview',
-            contents=system_prompt + "\nKullanıcı Mesajı: " + request.prompt
+        response = ollama_client.chat(
+            model=OLLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": request.prompt}
+            ],
+            stream=False,
+            format=json_schema,
+            options={
+                "temperature": 0
+            }
         )
-        raw_text = response.text.strip()
-        
-        if raw_text.startswith("```json"):
-            raw_text = raw_text[7:-3]
-        elif raw_text.startswith("```"):
-            raw_text = raw_text[3:-3]
-            
-        params = json.loads(raw_text)
+
+        llm_output = response["message"]["content"].strip()
+        search_params = json.loads(llm_output)
+
     except Exception as e:
-        print("ai hata detay:" f"{e}")
-        raise HTTPException(status_code=400, detail="Yapay zeka bu cümleyi anlayamadı. Lütfen daha net yazın.")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Yapay zeka analizi başarısız oldu: {str(e)}"
+        )
 
     query = db.query(models.Event)
-    
-    if params.get("city"):
-        query = query.filter(models.Event.city.ilike(f"%{params['city']}%"))
-    if params.get("category"):
-        query = query.filter(models.Event.category.ilike(f"%{params['category']}%"))
-    if params.get("start_date"):
-        query = query.filter(models.Event.date >= params["start_date"])
-    if params.get("end_date"):
-        query = query.filter(models.Event.date <= params["end_date"])
-        
-    ai_events = query.all()
-    
-    for event in ai_events:
-        sold_count = db.query(models.Ticket).filter(models.Ticket.event_id == event.id).count()
+
+    city = search_params.get("city")
+    category = search_params.get("category")
+    start_date = search_params.get("start_date")
+    end_date = search_params.get("end_date")
+
+    invalid_values = ["null", "", "yok", "belirtilmemiş", "belirtilmemis"]
+
+    if city and str(city).lower() not in invalid_values:
+        query = query.filter(models.Event.city.ilike(f"%{city}%"))
+
+    if category and str(category).lower() not in invalid_values:
+        query = query.filter(models.Event.category.ilike(f"%{category}%"))
+
+    if start_date and str(start_date).lower() not in invalid_values:
+        query = query.filter(models.Event.date >= start_date)
+
+    if end_date and str(end_date).lower() not in invalid_values:
+        query = query.filter(models.Event.date <= end_date)
+
+    events = query.all()
+
+    for event in events:
+        sold_count = db.query(models.Ticket).filter(
+            models.Ticket.event_id == event.id
+        ).count()
         event.available_tickets = event.capacity - sold_count
 
     return {
-        "filters_applied": params,
-        "events": ai_events
+        "llm_extracted_data": search_params,
+        "events": events
     }
 
 @router.post("/")

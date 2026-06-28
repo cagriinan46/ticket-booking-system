@@ -70,3 +70,29 @@ resource "aws_security_group" "rds_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
+
+resource "aws_security_group" "ollama_sg" {
+  name        = "ticket-ollama-sg"
+  description = "allows Ollama API traffic only from backend EC2"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description     = "ollama api only from backend ec2"
+    from_port       = 11434
+    to_port         = 11434
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ec2_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "ticket-ollama-sg"
+    Environment = "Dev"
+  }
+}
