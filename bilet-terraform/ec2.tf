@@ -167,7 +167,7 @@ resource "aws_instance" "ollama_server" {
   set -e
 
   dnf update -y
-  dnf install -y curl
+  command -v curl >/dev/null 2>&1 || dnf install -y curl-minimal
 
   curl -fsSL https://ollama.com/install.sh | sh
 
