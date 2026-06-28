@@ -53,3 +53,9 @@ variable "ollama_instance_type" {
   type        = string
   default     = "t3.medium"
 }
+
+variable "app_branch" {
+  description = "Git branch to deploy on EC2 instances"
+  type        = string
+  default     = "feature/local-llm"
+}

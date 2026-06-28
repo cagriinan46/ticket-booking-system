@@ -45,7 +45,7 @@ resource "aws_instance" "producer_api" {
   dnf update -y
   dnf install -y python3-pip git
 
-  git clone https://github.com/cagriinan46/ticket-booking-system.git /home/ec2-user/app
+  git clone --branch ${var.app_branch} --single-branch https://github.com/cagriinan46/ticket-booking-system.git /home/ec2-user/app
   cd /home/ec2-user/app/bilet-backend
   
   python3 -m venv venv
@@ -106,7 +106,7 @@ resource "aws_instance" "consumer_worker" {
   dnf update -y
   dnf install -y python3-pip git
 
-  git clone https://github.com/cagriinan46/ticket-booking-system.git /home/ec2-user/app
+  git clone --branch ${var.app_branch} --single-branch https://github.com/cagriinan46/ticket-booking-system.git /home/ec2-user/app
   cd /home/ec2-user/app/bilet-backend
   
   python3 -m venv venv
