@@ -86,6 +86,28 @@ resource "aws_instance" "producer_api" {
 
   chown -R ec2-user:ec2-user /home/ec2-user/app
 
+  command -v curl >/dev/null 2>&1 || dnf install -y curl-minimal
+
+  OLLAMA_URL="http://${aws_instance.ollama_server.private_ip}:11434"
+  OLLAMA_MODEL="${var.ollama_model}"
+
+  echo "Waiting for Ollama model to be ready: $OLLAMA_MODEL"
+
+  for i in $(seq 1 180); do
+    if curl -s "$OLLAMA_URL/api/tags" | grep -q "$OLLAMA_MODEL"; then
+      echo "Ollama model is ready: $OLLAMA_MODEL"
+      break
+    fi
+
+    if [ "$i" -eq 180 ]; then
+      echo "Ollama model was not ready after 30 minutes. Exiting."
+      exit 1
+    fi
+
+    echo "Still waiting for Ollama model: $OLLAMA_MODEL"
+    sleep 10
+  done
+
   systemctl daemon-reload
   systemctl enable ticket-producer
   systemctl start ticket-producer
@@ -168,54 +190,98 @@ resource "aws_instance" "ollama_server" {
   }
 
   user_data = <<-EOF
-#!/bin/bash
-set -e
+  #!/bin/bash
+  set -e
 
-exec > >(tee /var/log/ollama-user-data.log | logger -t ollama-user-data -s 2>/dev/console) 2>&1
+  exec > >(tee /var/log/ollama-user-data.log | logger -t ollama-user-data -s 2>/dev/console) 2>&1
 
-dnf update -y
-command -v curl >/dev/null 2>&1 || dnf install -y curl-minimal
+  MODEL="${var.ollama_model}"
 
-curl -fsSL https://ollama.com/install.sh | sh
+  echo "Starting Ollama setup"
+  echo "Target model: $MODEL"
 
-mkdir -p /etc/systemd/system/ollama.service.d
+  export HOME=/root
+  export PATH=/usr/local/bin:/usr/bin:/bin:$PATH
 
-cat <<'EOT' > /etc/systemd/system/ollama.service.d/override.conf
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0:11434"
-EOT
+  dnf update -y
+  command -v curl >/dev/null 2>&1 || dnf install -y curl-minimal
 
-systemctl daemon-reload
-systemctl enable ollama
-systemctl restart ollama
+  curl -fsSL https://ollama.com/install.sh | sh
 
-for i in $(seq 1 60); do
-  if curl -s http://localhost:11434/api/tags >/dev/null; then
-    echo "Ollama API is ready"
-    break
-  fi
+  mkdir -p /etc/systemd/system/ollama.service.d
+
+  cat <<'EOT' > /etc/systemd/system/ollama.service.d/override.conf
+  [Service]
+  Environment="OLLAMA_HOST=0.0.0.0:11434"
+  Environment="HOME=/usr/share/ollama"
+  EOT
+
+  systemctl daemon-reload
+  systemctl enable ollama
+  systemctl restart ollama
 
   echo "Waiting for Ollama API..."
-  sleep 5
-done
 
-/usr/local/bin/ollama pull ${var.ollama_model}
-/usr/local/bin/ollama list
+  for i in $(seq 1 60); do
+    if curl -s http://localhost:11434/api/tags >/dev/null; then
+      echo "Ollama API is ready"
+      break
+    fi
 
-curl -s http://localhost:11434/api/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "${var.ollama_model}",
-    "prompt": "OK",
-    "stream": false,
-    "keep_alive": "30m",
-    "options": {
-      "num_predict": 1
-    }
-  }'
+    if [ "$i" -eq 60 ]; then
+      echo "Ollama API did not become ready"
+      exit 1
+    fi
 
-echo "Ollama server hazir! Model: ${var.ollama_model}" > /home/ec2-user/ollama-status.txt
-EOF
+    sleep 5
+  done
+
+  echo "Cleaning possible broken partial model files"
+  rm -rf /usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5 || true
+  find /usr/share/ollama/.ollama/models/blobs -type f -name "*partial*" -delete || true
+
+  echo "Pulling model through Ollama API: $MODEL"
+
+  for attempt in $(seq 1 3); do
+    echo "Model pull attempt $attempt"
+
+    if curl -sS --fail --max-time 1800 http://localhost:11434/api/pull \
+      -H "Content-Type: application/json" \
+      -d "{\"name\":\"$MODEL\",\"stream\":false}"; then
+      echo "Model pull succeeded"
+      break
+    fi
+
+    echo "Model pull failed on attempt $attempt"
+
+    rm -rf /usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5 || true
+    find /usr/share/ollama/.ollama/models/blobs -type f -name "*partial*" -delete || true
+
+    sleep 15
+
+    if [ "$attempt" -eq 3 ]; then
+      echo "Model pull failed after 3 attempts"
+      exit 1
+    fi
+  done
+
+  echo "Checking installed models"
+
+  if ! curl -s http://localhost:11434/api/tags | grep -q "$MODEL"; then
+    echo "Model is still missing after pull: $MODEL"
+    curl -s http://localhost:11434/api/tags
+    exit 1
+  fi
+
+  echo "Warming up model"
+
+  curl -sS --fail --max-time 600 http://localhost:11434/api/generate \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"prompt\":\"OK\",\"stream\":false,\"keep_alive\":\"30m\",\"options\":{\"num_predict\":1}}"
+
+  echo "Ollama server hazir! Model: $MODEL" > /home/ec2-user/ollama-status.txt
+  echo "Ollama setup completed successfully"
+  EOF
 
   tags = {
     Name = "Ticket-Ollama-Server"
