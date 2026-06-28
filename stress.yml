@@ -1,5 +1,5 @@
 config:
-  target: "http://ticket-app-lb-504591307.eu-central-1.elb.amazonaws.com" 
+  target: "http://ticket-app-lb-1285364770.eu-central-1.elb.amazonaws.com" 
   phases:
     - duration: 30 
       arrivalRate: 20
