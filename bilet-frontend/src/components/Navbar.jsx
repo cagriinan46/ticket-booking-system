@@ -64,6 +64,109 @@ function Navbar() {
     navigate('/login');
   };
 
+  const readApiResponse = async (response) => {
+    const text = await response.text();
+    if (!text) return {};
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { detail: text };
+    }
+  };
+
+  const promptHasSearchClue = (prompt) => {
+    const normalizedPrompt = prompt.toLocaleLowerCase('tr-TR');
+    const categories = ['konser', 'tiyatro', 'festival', 'stand-up', 'standup', 'spor'];
+    const cities = ['istanbul', 'İstanbul'.toLocaleLowerCase('tr-TR'), 'ankara', 'izmir', 'konya', 'antalya', 'bursa', 'adana', 'eskişehir'];
+    const dateWords = ['bugün', 'yarın', 'hafta', 'ay', 'mayıs', 'haziran', 'temmuz', 'ağustos', 'eylül', 'ekim', 'kasım', 'aralık'];
+
+    return [...categories, ...cities, ...dateWords].some(word => normalizedPrompt.includes(word)) || /\d/.test(normalizedPrompt);
+  };
+
+  const hasAppliedFilter = (filters) => {
+    if (!filters) return false;
+    return Boolean(filters.city || filters.category || filters.start_date || filters.end_date);
+  };
+
+  const buildLegacyReply = (events, filters) => {
+    const parts = [];
+    if (filters?.city) parts.push(filters.city);
+    if (filters?.category) parts.push(filters.category);
+    if (filters?.start_date || filters?.end_date) {
+      parts.push(`${filters.start_date || 'başlangıç'} - ${filters.end_date || 'bitiş'}`);
+    }
+
+    if (events.length > 0) {
+      return parts.length > 0
+        ? `${parts.join(', ')} kriterleriyle ${events.length} etkinlik buldum.`
+        : `${events.length} etkinlik buldum.`;
+    }
+
+    return parts.length > 0
+      ? `${parts.join(', ')} kriterlerine uygun etkinlik bulamadım.`
+      : 'Biraz daha netleştirelim: şehir, tarih veya kategori söyleyebilir misin?';
+  };
+
+  const requestLegacyAiSearch = async (prompt) => {
+    const response = await fetch(`${backendUrl}/api/events/ai-search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt })
+    });
+    const data = await readApiResponse(response);
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Yapay zeka servisi şu anda yanıt vermiyor. Backend deploy ve Ollama bağlantısını kontrol etmek gerekiyor.");
+    }
+
+    const filters = data.filters_applied || data.llm_extracted_data || null;
+    const foundEvents = Array.isArray(data.events) ? data.events : [];
+    const needsClarification = !hasAppliedFilter(filters);
+
+    return {
+      reply: needsClarification
+        ? 'Biraz daha netleştirelim: şehir, tarih veya kategori söyleyebilir misin?'
+        : buildLegacyReply(foundEvents, filters),
+      filters_applied: filters,
+      events: needsClarification ? [] : foundEvents,
+      needs_clarification: needsClarification
+    };
+  };
+
+  const requestAiChat = async (prompt, nextMessages) => {
+    const response = await fetch(`${backendUrl}/api/events/ai-chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: nextMessages.map(message => ({
+          role: message.role,
+          content: message.content
+        }))
+      })
+    });
+    const data = await readApiResponse(response);
+
+    if (response.status === 405) {
+      if (!promptHasSearchClue(prompt)) {
+        return {
+          reply: 'Biraz daha netleştirelim: şehir, tarih veya kategori söyleyebilir misin?',
+          filters_applied: null,
+          events: [],
+          needs_clarification: true
+        };
+      }
+
+      return requestLegacyAiSearch(prompt);
+    }
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Yapay zeka aramasında bir hata oluştu.");
+    }
+
+    return data;
+  };
+
   const handleAiSearch = async () => {
     const prompt = aiInput.trim();
     if (!prompt || isAiSearching) return;
@@ -80,22 +183,7 @@ function Navbar() {
     setHasSearched(true);
     
     try {
-      const response = await fetch(`${backendUrl}/api/events/ai-chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: nextMessages.map(message => ({
-            role: message.role,
-            content: message.content
-          }))
-        })
-      });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.detail || "Yapay zeka aramasında bir hata oluştu.");
-      }
+      const data = await requestAiChat(prompt, nextMessages);
 
       const foundEvents = Array.isArray(data.events) ? data.events : [];
       const assistantMessage = {
