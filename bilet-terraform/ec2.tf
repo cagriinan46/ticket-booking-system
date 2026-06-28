@@ -162,32 +162,60 @@ resource "aws_instance" "ollama_server" {
   vpc_security_group_ids = [aws_security_group.ollama_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
+  root_block_device {
+    volume_size = 30
+    volume_type = "gp3"
+  }
+
   user_data = <<-EOF
-  #!/bin/bash
-  set -e
+#!/bin/bash
+set -e
 
-  dnf update -y
-  command -v curl >/dev/null 2>&1 || dnf install -y curl-minimal
+exec > >(tee /var/log/ollama-user-data.log | logger -t ollama-user-data -s 2>/dev/console) 2>&1
 
-  curl -fsSL https://ollama.com/install.sh | sh
+dnf update -y
+command -v curl >/dev/null 2>&1 || dnf install -y curl-minimal
 
-  mkdir -p /etc/systemd/system/ollama.service.d
+curl -fsSL https://ollama.com/install.sh | sh
 
-  cat <<'EOT' > /etc/systemd/system/ollama.service.d/override.conf
-  [Service]
-  Environment="OLLAMA_HOST=0.0.0.0:11434"
-  EOT
+mkdir -p /etc/systemd/system/ollama.service.d
 
-  systemctl daemon-reload
-  systemctl enable ollama
-  systemctl restart ollama
+cat <<'EOT' > /etc/systemd/system/ollama.service.d/override.conf
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+EOT
 
-  sleep 10
+systemctl daemon-reload
+systemctl enable ollama
+systemctl restart ollama
 
-  ollama pull ${var.ollama_model}
+for i in $(seq 1 60); do
+  if curl -s http://localhost:11434/api/tags >/dev/null; then
+    echo "Ollama API is ready"
+    break
+  fi
 
-  echo "Ollama server hazir! Model: ${var.ollama_model}" > /home/ec2-user/ollama-status.txt
-  EOF
+  echo "Waiting for Ollama API..."
+  sleep 5
+done
+
+/usr/local/bin/ollama pull ${var.ollama_model}
+/usr/local/bin/ollama list
+
+curl -s http://localhost:11434/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "${var.ollama_model}",
+    "prompt": "OK",
+    "stream": false,
+    "keep_alive": "30m",
+    "options": {
+      "num_predict": 1
+    }
+  }'
+
+echo "Ollama server hazir! Model: ${var.ollama_model}" > /home/ec2-user/ollama-status.txt
+EOF
 
   tags = {
     Name = "Ticket-Ollama-Server"
