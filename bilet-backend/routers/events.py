@@ -5,7 +5,7 @@ from database import get_db
 from routers.auth import get_current_user
 from fastapi import HTTPException
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Literal, Optional
 from sqlalchemy import text
 from datetime import datetime
 from sqlalchemy.orm import joinedload
@@ -31,6 +31,13 @@ router = APIRouter(
 
 class AISearchRequest(BaseModel):
     prompt: str
+
+class AIChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+class AIChatRequest(BaseModel):
+    messages: list[AIChatMessage]
 
 class EventCreate(BaseModel):
     title: str
@@ -94,8 +101,188 @@ ollama_client = Client(
     timeout=60.0
 )
 
-@router.post("/ai-search")
-def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
+FILTER_KEYS = ["city", "category", "start_date", "end_date"]
+INVALID_AI_VALUES = ["null", "", "yok", "belirtilmemiş", "belirtilmemis", "none"]
+
+AI_FILTER_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "city": {
+            "type": ["string", "null"]
+        },
+        "category": {
+            "type": ["string", "null"],
+            "enum": ["Konser", "Tiyatro", "Festival", "Stand-up", "Spor", None]
+        },
+        "start_date": {
+            "type": ["string", "null"]
+        },
+        "end_date": {
+            "type": ["string", "null"]
+        }
+    },
+    "required": ["city", "category", "start_date", "end_date"]
+}
+
+AI_CHAT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "city": {
+            "type": ["string", "null"]
+        },
+        "category": {
+            "type": ["string", "null"],
+            "enum": ["Konser", "Tiyatro", "Festival", "Stand-up", "Spor", None]
+        },
+        "start_date": {
+            "type": ["string", "null"]
+        },
+        "end_date": {
+            "type": ["string", "null"]
+        },
+        "needs_clarification": {
+            "type": "boolean"
+        },
+        "follow_up_question": {
+            "type": ["string", "null"]
+        }
+    },
+    "required": [
+        "city",
+        "category",
+        "start_date",
+        "end_date",
+        "needs_clarification",
+        "follow_up_question"
+    ]
+}
+
+def clean_ai_value(value):
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned.lower() in INVALID_AI_VALUES:
+            return None
+        return cleaned
+
+    return value
+
+def normalize_ai_intent(payload):
+    normalized = {
+        "city": clean_ai_value(payload.get("city")),
+        "category": clean_ai_value(payload.get("category")),
+        "start_date": clean_ai_value(payload.get("start_date")),
+        "end_date": clean_ai_value(payload.get("end_date")),
+        "needs_clarification": bool(payload.get("needs_clarification", False)),
+        "follow_up_question": clean_ai_value(payload.get("follow_up_question")),
+    }
+
+    has_filter = any(normalized[key] for key in FILTER_KEYS)
+
+    if not has_filter and not normalized["needs_clarification"]:
+        normalized["needs_clarification"] = True
+        normalized["follow_up_question"] = "Hangi şehir, tarih veya kategoriye göre etkinlik arayayım?"
+
+    if normalized["needs_clarification"] and not normalized["follow_up_question"]:
+        normalized["follow_up_question"] = "Biraz daha detay verebilir misiniz? Şehir, tarih veya kategori söyleyebilirsiniz."
+
+    return normalized
+
+def event_filters_from_intent(intent):
+    return {key: intent.get(key) for key in FILTER_KEYS}
+
+def parse_llm_json(content):
+    cleaned = content.strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        return json.loads(cleaned[start:end + 1])
+
+def attach_available_tickets(db, events):
+    for event in events:
+        sold_count = db.query(models.Ticket).filter(
+            models.Ticket.event_id == event.id
+        ).count()
+        event.available_tickets = event.capacity - sold_count
+
+def query_events_by_filters(db, filters):
+    query = db.query(models.Event)
+
+    city = filters.get("city")
+    category = filters.get("category")
+    start_date = filters.get("start_date")
+    end_date = filters.get("end_date")
+
+    if city:
+        query = query.filter(models.Event.city.ilike(f"%{city}%"))
+
+    if category:
+        query = query.filter(models.Event.category.ilike(f"%{category}%"))
+
+    if start_date:
+        query = query.filter(models.Event.date >= start_date)
+
+    if end_date:
+        query = query.filter(models.Event.date <= end_date)
+
+    events = query.all()
+    attach_available_tickets(db, events)
+
+    return events
+
+def describe_filters(intent):
+    parts = []
+
+    if intent.get("city"):
+        parts.append(intent["city"])
+
+    if intent.get("category"):
+        parts.append(intent["category"])
+
+    if intent.get("start_date") and intent.get("end_date"):
+        if intent["start_date"] == intent["end_date"]:
+            parts.append(intent["start_date"])
+        else:
+            parts.append(f"{intent['start_date']} - {intent['end_date']}")
+    elif intent.get("start_date"):
+        parts.append(f"{intent['start_date']} sonrası")
+    elif intent.get("end_date"):
+        parts.append(f"{intent['end_date']} öncesi")
+
+    return ", ".join(parts)
+
+def build_ai_chat_reply(events, intent):
+    if intent.get("needs_clarification"):
+        return intent.get("follow_up_question")
+
+    filter_text = describe_filters(intent)
+
+    if events:
+        if filter_text:
+            return f"{filter_text} kriterleriyle {len(events)} etkinlik buldum."
+        return f"Aramana uygun {len(events)} etkinlik buldum."
+
+    if filter_text:
+        return f"{filter_text} kriterlerine uygun etkinlik bulamadım. Farklı bir şehir, tarih veya kategori deneyebilirsiniz."
+
+    return "Aramana uygun etkinlik bulamadım. Şehir, tarih veya kategori ekleyerek tekrar deneyebilirsiniz."
+
+def extract_ai_search_intent(prompt):
     today = date.today().isoformat()
 
     system_prompt = f"""
@@ -129,81 +316,132 @@ def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
         Sadece JSON dön. Açıklama yazma. Markdown kullanma.
         """
 
-    json_schema = {
-    "type": "object",
-    "properties": {
-        "city": {
-            "type": ["string", "null"]
-        },
-        "category": {
-            "type": ["string", "null"],
-            "enum": ["Konser", "Tiyatro", "Festival", "Stand-up", "Spor", None]
-        },
-        "start_date": {
-            "type": ["string", "null"]
-        },
-        "end_date": {
-            "type": ["string", "null"]
+    response = ollama_client.chat(
+        model=OLLAMA_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        stream=False,
+        format=AI_FILTER_JSON_SCHEMA,
+        options={
+            "temperature": 0
         }
-    },
-    "required": ["city", "category", "start_date", "end_date"]
-}
+    )
 
+    llm_output = response["message"]["content"].strip()
+    return normalize_ai_intent(parse_llm_json(llm_output))
+
+def extract_ai_chat_intent(messages):
+    today = date.today().isoformat()
+
+    system_prompt = f"""
+        Sen PortaBilet için çalışan konuşmalı etkinlik arama asistanısın.
+        Bugünün tarihi: {today}.
+
+        Görevin veritabanını sorgulamak değildir. Veritabanına asla erişemezsin.
+        Sadece konuşmadan arama niyetini çıkar ve JSON dön.
+
+        JSON alanları:
+        city, category, start_date, end_date, needs_clarification, follow_up_question.
+
+        Kurallar:
+        - Kullanıcı en az bir somut arama kriteri verdiyse needs_clarification false olmalı.
+        - Hiç şehir, kategori veya tarih yoksa needs_clarification true olmalı.
+        - needs_clarification true ise follow_up_question doğal Türkçe bir soru olmalı.
+        - needs_clarification false ise follow_up_question null olmalı.
+        - Kullanıcı bir alanı açıkça belirtmediyse o alan null olmalı.
+        - Genel ifadeler kategori değildir. Örneğin "herhangi bir etkinlik", "etkinlik var mı", "ne var", "bir şey var mı" ifadelerinde category null olmalı.
+        - category sadece şu değerlerden biri olabilir: Konser, Tiyatro, Festival, Stand-up, Spor.
+        - Tarih varsa start_date ve end_date YYYY-MM-DD formatında olmalı.
+        - Sadece tek tarih varsa start_date ve end_date aynı gün olmalı.
+        - Tarih yoksa start_date ve end_date null olmalı.
+        - Türkçe ay adlarını doğru yorumla.
+        - Önceki assistant mesajlarını sadece bağlam olarak kullan.
+
+        Örnek:
+        Kullanıcı: "Konser var mı?"
+        Cevap: {{"city": null, "category": "Konser", "start_date": null, "end_date": null, "needs_clarification": false, "follow_up_question": null}}
+
+        Örnek:
+        Kullanıcı: "Bir şeyler bakıyorum"
+        Cevap: {{"city": null, "category": null, "start_date": null, "end_date": null, "needs_clarification": true, "follow_up_question": "Hangi şehirde veya hangi türde etkinlik arıyorsunuz?"}}
+
+        Sadece JSON dön. Açıklama yazma. Markdown kullanma.
+        """
+
+    ollama_messages = [{"role": "system", "content": system_prompt}]
+    ollama_messages.extend(
+        {"role": message.role, "content": message.content.strip()}
+        for message in messages
+        if message.content.strip()
+    )
+
+    response = ollama_client.chat(
+        model=OLLAMA_MODEL,
+        messages=ollama_messages,
+        stream=False,
+        format=AI_CHAT_JSON_SCHEMA,
+        options={
+            "temperature": 0
+        }
+    )
+
+    llm_output = response["message"]["content"].strip()
+    return normalize_ai_intent(parse_llm_json(llm_output))
+
+@router.post("/ai-search")
+def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
     try:
-        response = ollama_client.chat(
-            model=OLLAMA_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request.prompt}
-            ],
-            stream=False,
-            format=json_schema,
-            options={
-                "temperature": 0
-            }
-        )
-
-        llm_output = response["message"]["content"].strip()
-        search_params = json.loads(llm_output)
-
+        intent = extract_ai_search_intent(request.prompt)
+        search_params = event_filters_from_intent(intent)
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Yapay zeka analizi başarısız oldu: {str(e)}"
         )
 
-    query = db.query(models.Event)
-
-    city = search_params.get("city")
-    category = search_params.get("category")
-    start_date = search_params.get("start_date")
-    end_date = search_params.get("end_date")
-
-    invalid_values = ["null", "", "yok", "belirtilmemiş", "belirtilmemis"]
-
-    if city and str(city).lower() not in invalid_values:
-        query = query.filter(models.Event.city.ilike(f"%{city}%"))
-
-    if category and str(category).lower() not in invalid_values:
-        query = query.filter(models.Event.category.ilike(f"%{category}%"))
-
-    if start_date and str(start_date).lower() not in invalid_values:
-        query = query.filter(models.Event.date >= start_date)
-
-    if end_date and str(end_date).lower() not in invalid_values:
-        query = query.filter(models.Event.date <= end_date)
-
-    events = query.all()
-
-    for event in events:
-        sold_count = db.query(models.Ticket).filter(
-            models.Ticket.event_id == event.id
-        ).count()
-        event.available_tickets = event.capacity - sold_count
+    events = query_events_by_filters(db, search_params)
 
     return {
         "llm_extracted_data": search_params,
+        "filters_applied": search_params,
         "events": events
+    }
+
+@router.post("/ai-chat")
+def ai_chat_events(request: AIChatRequest, db: Session = Depends(get_db)):
+    if not request.messages or not any(message.content.strip() for message in request.messages):
+        raise HTTPException(
+            status_code=400,
+            detail="Lütfen aramak istediğiniz etkinliği yazın."
+        )
+
+    try:
+        intent = extract_ai_chat_intent(request.messages)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Yapay zeka sohbet analizi başarısız oldu: {str(e)}"
+        )
+
+    filters = event_filters_from_intent(intent)
+
+    if intent.get("needs_clarification"):
+        return {
+            "reply": build_ai_chat_reply([], intent),
+            "filters_applied": filters,
+            "events": [],
+            "needs_clarification": True
+        }
+
+    events = query_events_by_filters(db, filters)
+
+    return {
+        "reply": build_ai_chat_reply(events, intent),
+        "filters_applied": filters,
+        "events": events,
+        "needs_clarification": False
     }
 
 @router.post("/")

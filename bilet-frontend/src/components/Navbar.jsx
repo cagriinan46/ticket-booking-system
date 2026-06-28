@@ -11,12 +11,17 @@ function Navbar() {
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const chatEndRef = useRef(null);
 
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiInput, setAiInput] = useState('');
+  const [aiMessages, setAiMessages] = useState([
+    { role: 'assistant', content: 'Nasıl bir etkinlik arıyorsunuz?' }
+  ]);
   const [isAiSearching, setIsAiSearching] = useState(false);
   const [aiEvents, setAiEvents] = useState([]);
   const [aiFiltersApplied, setAiFiltersApplied] = useState(null);
+  const [aiNeedsClarification, setAiNeedsClarification] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [favoriteIds, setFavoriteIds] = useState([]);
 
@@ -46,6 +51,12 @@ function Navbar() {
     }
   }, [isAiModalOpen, isLoggedIn, backendUrl]);
 
+  useEffect(() => {
+    if (isAiModalOpen) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [aiMessages, isAiSearching, isAiModalOpen]);
+
   const handleLogout = () => {
     localStorage.clear(); 
     setIsDropdownOpen(false);
@@ -54,15 +65,30 @@ function Navbar() {
   };
 
   const handleAiSearch = async () => {
-    if (!aiPrompt.trim()) return;
+    const prompt = aiInput.trim();
+    if (!prompt || isAiSearching) return;
+
+    const userMessage = { role: 'user', content: prompt };
+    const nextMessages = [...aiMessages, userMessage];
+
+    setAiMessages(nextMessages);
+    setAiInput('');
+    setAiEvents([]);
+    setAiFiltersApplied(null);
+    setAiNeedsClarification(false);
     setIsAiSearching(true);
     setHasSearched(true);
     
     try {
-      const response = await fetch(`${backendUrl}/api/events/ai-search`, {
+      const response = await fetch(`${backendUrl}/api/events/ai-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: aiPrompt })
+        body: JSON.stringify({
+          messages: nextMessages.map(message => ({
+            role: message.role,
+            content: message.content
+          }))
+        })
       });
       
       const data = await response.json();
@@ -71,16 +97,32 @@ function Navbar() {
         throw new Error(data.detail || "Yapay zeka aramasında bir hata oluştu.");
       }
 
-      setAiEvents(data.events);
-      setAiFiltersApplied(data.filters_applied);
+      const foundEvents = Array.isArray(data.events) ? data.events : [];
+      const assistantMessage = {
+        role: 'assistant',
+        content: data.reply || "Aramanı değerlendirdim."
+      };
+
+      setAiMessages([...nextMessages, assistantMessage]);
+      setAiEvents(foundEvents);
+      setAiFiltersApplied(data.filters_applied || data.llm_extracted_data || null);
+      setAiNeedsClarification(Boolean(data.needs_clarification));
       
-      if (data.events.length > 0) {
-        toast.success(`Yapay zeka ${data.events.length} etkinlik buldu!`);
+      if (data.needs_clarification) {
+        return;
+      }
+
+      if (foundEvents.length > 0) {
+        toast.success(`Yapay zeka ${foundEvents.length} etkinlik buldu!`);
       } else {
         toast("Bu tarihlere veya kriterlere uygun etkinlik yok.", { icon: '🔍' });
       }
       
     } catch (err) {
+      setAiMessages([
+        ...nextMessages,
+        { role: 'assistant', content: err.message }
+      ]);
       toast.error(err.message);
     } finally {
       setIsAiSearching(false);
@@ -107,7 +149,7 @@ function Navbar() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail);
-      toast.success(data.message);
+      toast.success(data.mesaj || data.message || "Favoriler güncellendi.");
     } catch (err) {
       toast.error(err.message);
     }
@@ -248,26 +290,53 @@ function Navbar() {
                 Yapay Zeka ile <span className="text-orange-500">Etkinlik Bul</span>
               </h2>
 
-              <div className="flex flex-col md:flex-row gap-3">
+              <div className="bg-white border border-orange-100 rounded-2xl p-4 h-72 overflow-y-auto shadow-inner space-y-3">
+                {aiMessages.map((message, index) => (
+                  <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm md:text-base font-medium shadow-sm ${
+                      message.role === 'user'
+                        ? 'bg-gradient-to-r from-orange-500 to-amber-500 text-white rounded-br-md'
+                        : 'bg-gray-100 text-gray-700 rounded-bl-md'
+                    }`}>
+                      {message.content}
+                    </div>
+                  </div>
+                ))}
+                {isAiSearching && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-100 text-orange-500 px-4 py-3 rounded-2xl rounded-bl-md text-sm md:text-base font-bold shadow-sm animate-pulse">
+                      Yanıt hazırlanıyor...
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleAiSearch();
+                }}
+                className="flex flex-col md:flex-row gap-3 mt-4"
+              >
                 <div className="flex-grow relative">
                   <svg className="w-6 h-6 text-orange-400 absolute left-4 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                   <input 
                     type="text" 
-                    value={aiPrompt}
-                    onChange={(e) => setAiPrompt(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAiSearch()}
-                    placeholder="Örn: 20-30 Mayıs arası İstanbul'da tiyatro var mı?" 
+                    value={aiInput}
+                    onChange={(e) => setAiInput(e.target.value)}
+                    placeholder="Örn: Bu hafta İstanbul'da tiyatro var mı?"
                     className="w-full pl-12 pr-4 py-4 bg-white border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400 transition-all text-gray-700 shadow-sm text-lg"
                   />
                 </div>
                 <button 
-                  onClick={handleAiSearch}
-                  disabled={!aiPrompt.trim() || isAiSearching}
+                  type="submit"
+                  disabled={!aiInput.trim() || isAiSearching}
                   className="bg-gradient-to-r from-orange-500 to-amber-500 text-white font-bold py-4 px-10 rounded-2xl hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center shadow-md text-lg"
                 >
-                  {isAiSearching ? 'Aranıyor...' : 'Ara'}
+                  {isAiSearching ? 'Aranıyor...' : 'Gönder'}
                 </button>
-              </div>
+              </form>
 
               {hasSearched && !isAiSearching && aiFiltersApplied && (
                 <div className="mt-4 flex flex-wrap gap-2 items-center text-sm">
@@ -292,6 +361,11 @@ function Navbar() {
                   <div className="inline-block w-12 h-12 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin mb-4"></div>
                   <p className="text-orange-500 font-extrabold text-xl animate-pulse">Sizin için en iyi etkinlikler taranıyor...</p>
                 </div>
+              ) : hasSearched && aiNeedsClarification ? (
+                <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                  <p className="text-gray-600 font-bold text-lg">Cevabınızı bekliyorum.</p>
+                  <p className="text-gray-400 mt-2">Detayı yazdığınızda uygun etkinlikleri burada göstereceğim.</p>
+                </div>
               ) : hasSearched ? (
                 aiEvents.length === 0 ? (
                   <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm">
@@ -312,7 +386,14 @@ function Navbar() {
                         const isSoldOut = event.available_tickets === 0;
 
                         return (
-                          <div key={event.id} className="relative" onClick={closeModal}>
+                          <div
+                            key={event.id}
+                            className="relative"
+                            onClick={(e) => {
+                              if (e.target.closest('button')) return;
+                              closeModal();
+                            }}
+                          >
                             {isSoldOut && (
                               <div className="absolute -top-3 -right-3 z-20 bg-gray-900 text-white font-black text-xs px-4 py-2 rounded-full shadow-lg border-2 border-white transform rotate-3">
                                 TÜKENDİ
