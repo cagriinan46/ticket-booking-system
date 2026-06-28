@@ -9,13 +9,13 @@ from typing import Optional
 from sqlalchemy import text
 from datetime import datetime
 from sqlalchemy.orm import joinedload
-from google import genai
 import models
 import iyzipay
 import boto3
 import json
 import os
 import requests
+import ollama
 
 load_dotenv()
 
@@ -85,9 +85,7 @@ class ReviewCreate(BaseModel):
     comment: Optional[str] = None
 
 @router.post("/ai-search")
-def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    
+def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):    
     system_prompt = """
     Sen bir etkinlik arama asistanısın. Kullanıcının girdiği metinden etkinlik filtreleme parametrelerini çıkar.
     SADECE JSON FORMATINDA ÇIKTI VER. BAŞKA HİÇBİR METİN VEYA AÇIKLAMA YAZMA. Markdown kullanma.
