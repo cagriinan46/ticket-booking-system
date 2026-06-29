@@ -188,7 +188,8 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertEqual(response["events"], [])
         self.assertFalse(response["should_search"])
         self.assertEqual(response["intent"], "search_events")
-        self.assertEqual(response["reply"], "Nasıl bir eğlence arıyorsun: konser, tiyatro, festival ya da spor gibi?")
+        self.assertIn("konser", response["reply"].lower())
+        self.assertEqual(response["slot_state"]["requested_slot"], "category")
 
     def test_ai_chat_updates_filters_without_querying_database(self):
         request = events.AIChatRequest(
@@ -305,6 +306,93 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertEqual(len(response["events"]), 1)
         self.assertEqual(response["filters_applied"]["category"], "Konser")
 
+    def test_ai_chat_blocks_city_and_category_until_date_slot_is_answered(self):
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="user", content="istanbulda konser")
+            ]
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: {
+                "intent": "search_events",
+                "filters": {
+                    "city": "İstanbul",
+                    "category": "Konser",
+                    "start_date": None,
+                    "end_date": None,
+                },
+                "should_search": True,
+                "needs_clarification": False,
+                "assistant_reply": "İstanbul'daki konserleri arıyorum.",
+            }
+            events.query_events_by_filters = lambda db, filters: (_ for _ in ()).throw(
+                AssertionError("Database should not be queried until date is answered")
+            )
+
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertFalse(response["should_search"])
+        self.assertTrue(response["needs_clarification"])
+        self.assertEqual(response["events"], [])
+        self.assertEqual(response["filters_applied"]["city"], "İstanbul")
+        self.assertEqual(response["filters_applied"]["category"], "Konser")
+        self.assertEqual(response["slot_state"]["date"], "unknown")
+        self.assertEqual(response["slot_state"]["requested_slot"], "date")
+        self.assertIn("tarih", response["reply"].lower())
+
+    def test_ai_chat_marks_requested_slot_as_any_and_asks_next_slot(self):
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="assistant", content="Konser için hangi şehir olsun? Fark etmezse söyle."),
+                events.AIChatMessage(role="user", content="fark etmez")
+            ],
+            current_filters=events.AIChatFilters(category="Konser"),
+            slot_state=events.AIChatSlotState(
+                category="filled",
+                city="unknown",
+                date="unknown",
+                requested_slot="city",
+            ),
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: {
+                "intent": "update_filters",
+                "filters": {
+                    "city": None,
+                    "category": None,
+                    "start_date": None,
+                    "end_date": None,
+                },
+                "should_search": False,
+                "needs_clarification": True,
+                "assistant_reply": "Tamam, şehir fark etmiyor.",
+            }
+            events.query_events_by_filters = lambda db, filters: (_ for _ in ()).throw(
+                AssertionError("Database should not be queried before date slot")
+            )
+
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertFalse(response["should_search"])
+        self.assertTrue(response["needs_clarification"])
+        self.assertEqual(response["slot_state"]["city"], "any")
+        self.assertEqual(response["slot_state"]["requested_slot"], "date")
+        self.assertIn("tarih", response["reply"].lower())
+
     def test_ai_chat_smalltalk_does_not_turn_into_search_prompt(self):
         request = events.AIChatRequest(
             messages=[
@@ -340,12 +428,41 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertEqual(response["intent"], "smalltalk")
         self.assertFalse(response["should_search"])
         self.assertFalse(response["needs_clarification"])
-        self.assertEqual(response["reply"], "Buradayım, etkinlik avına çıkmaya hazırım.")
+        self.assertIn("Selam", response["reply"])
 
-    def test_ai_chat_queries_database_when_intent_should_search(self):
+    def test_ai_chat_handles_greeting_without_llm_or_database(self):
         request = events.AIChatRequest(
             messages=[
-                events.AIChatMessage(role="user", content="İstanbul'da konser ara")
+                events.AIChatMessage(role="user", content="selam")
+            ]
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                AssertionError("LLM should not be called for simple greeting")
+            )
+            events.query_events_by_filters = lambda db, filters: (_ for _ in ()).throw(
+                AssertionError("Database should not be queried")
+            )
+
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertEqual(response["intent"], "smalltalk")
+        self.assertFalse(response["should_search"])
+        self.assertFalse(response["needs_clarification"])
+        self.assertEqual(response["events"], [])
+        self.assertIn("Selam", response["reply"])
+
+    def test_ai_chat_queries_database_when_all_slots_are_ready(self):
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="user", content="İstanbul'da bu hafta konser ara")
             ]
         )
 
@@ -358,8 +475,8 @@ class AIChatHelpersTest(unittest.TestCase):
                 "filters": {
                     "city": "İstanbul",
                     "category": "Konser",
-                    "start_date": None,
-                    "end_date": None,
+                    "start_date": "2026-06-29",
+                    "end_date": "2026-07-05",
                 },
                 "should_search": True,
                 "needs_clarification": False,
@@ -376,6 +493,33 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertTrue(response["should_search"])
         self.assertEqual(len(response["events"]), 2)
         self.assertEqual(response["filters_applied"]["city"], "İstanbul")
+        self.assertEqual(response["slot_state"]["date"], "filled")
+
+    def test_ai_chat_returns_controlled_http_error_when_llm_fails(self):
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="user", content="açık havada güzel bir plan istiyorum")
+            ]
+        )
+
+        original_extract = events.extract_ai_chat_intent
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                TimeoutError("ollama timed out")
+            )
+
+            with self.assertRaises(events.HTTPException) as raised:
+                events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["message"],
+            "AI sohbet servisi şu anda yanıt vermiyor. Lütfen biraz sonra tekrar deneyin.",
+        )
+        self.assertEqual(raised.exception.detail["error_code"], "AI_CHAT_UNAVAILABLE")
 
     def test_ai_search_keeps_existing_shape_and_adds_filters_applied(self):
         request = events.AISearchRequest(prompt="İstanbul'da konser var mı?")

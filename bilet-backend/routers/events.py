@@ -15,9 +15,11 @@ import models
 import iyzipay
 import boto3
 import json
+import logging
 import os
 import requests
 import ollama
+import time
 
 load_dotenv()
 
@@ -42,9 +44,16 @@ class AIChatFilters(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
 
+class AIChatSlotState(BaseModel):
+    category: Literal["unknown", "filled", "any"] = "unknown"
+    city: Literal["unknown", "filled", "any"] = "unknown"
+    date: Literal["unknown", "filled", "any"] = "unknown"
+    requested_slot: Optional[Literal["category", "city", "date"]] = None
+
 class AIChatRequest(BaseModel):
     messages: list[AIChatMessage]
     current_filters: Optional[AIChatFilters] = None
+    slot_state: Optional[AIChatSlotState] = None
 
 class EventCreate(BaseModel):
     title: str
@@ -102,15 +111,50 @@ class ReviewCreate(BaseModel):
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+try:
+    OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", os.getenv("OLLAMA_TIMEOUT", "15")))
+except ValueError:
+    OLLAMA_TIMEOUT_SECONDS = 15.0
+
+logger = logging.getLogger(__name__)
 
 ollama_client = Client(
     host=OLLAMA_HOST,
-    timeout=60.0
+    timeout=OLLAMA_TIMEOUT_SECONDS
 )
 
 FILTER_KEYS = ["city", "category", "start_date", "end_date"]
+SLOT_KEYS = ["category", "city", "date"]
+SLOT_STATUSES = ["unknown", "filled", "any"]
 AI_CHAT_INTENTS = ["search_events", "update_filters", "reset_filters", "smalltalk", "help"]
 INVALID_AI_VALUES = ["null", "", "yok", "belirtilmemiş", "belirtilmemis", "none"]
+CATEGORY_ALIASES = {
+    "konser": "Konser",
+    "muzik": "Konser",
+    "müzik": "Konser",
+    "tiyatro": "Tiyatro",
+    "festival": "Festival",
+    "stand-up": "Stand-up",
+    "standup": "Stand-up",
+    "komedi": "Stand-up",
+    "spor": "Spor",
+    "mac": "Spor",
+    "maç": "Spor",
+}
+KNOWN_CITIES = [
+    "Adana", "Adıyaman", "Afyonkarahisar", "Ağrı", "Amasya", "Ankara", "Antalya",
+    "Artvin", "Aydın", "Balıkesir", "Bilecik", "Bingöl", "Bitlis", "Bolu",
+    "Burdur", "Bursa", "Çanakkale", "Çankırı", "Çorum", "Denizli", "Diyarbakır",
+    "Edirne", "Elazığ", "Erzincan", "Erzurum", "Eskişehir", "Gaziantep",
+    "Giresun", "Gümüşhane", "Hakkari", "Hatay", "Isparta", "Mersin", "İstanbul",
+    "İzmir", "Kars", "Kastamonu", "Kayseri", "Kırklareli", "Kırşehir",
+    "Kocaeli", "Konya", "Kütahya", "Malatya", "Manisa", "Kahramanmaraş",
+    "Mardin", "Muğla", "Muş", "Nevşehir", "Niğde", "Ordu", "Rize", "Sakarya",
+    "Samsun", "Siirt", "Sinop", "Sivas", "Tekirdağ", "Tokat", "Trabzon",
+    "Tunceli", "Şanlıurfa", "Uşak", "Van", "Yozgat", "Zonguldak", "Aksaray",
+    "Bayburt", "Karaman", "Kırıkkale", "Batman", "Şırnak", "Bartın", "Ardahan",
+    "Iğdır", "Yalova", "Karabük", "Kilis", "Osmaniye", "Düzce",
+]
 
 AI_FILTER_JSON_SCHEMA = {
     "type": "object",
@@ -237,14 +281,402 @@ def merge_event_filters(current_filters, new_filters):
 
     return merged
 
+def empty_slot_state():
+    return {
+        "category": "unknown",
+        "city": "unknown",
+        "date": "unknown",
+        "requested_slot": None,
+    }
+
+def slot_state_to_dict(slot_state):
+    if slot_state is None:
+        return empty_slot_state()
+
+    if isinstance(slot_state, BaseModel):
+        if hasattr(slot_state, "model_dump"):
+            data = slot_state.model_dump()
+        else:
+            data = slot_state.dict()
+    else:
+        data = dict(slot_state)
+
+    state = empty_slot_state()
+    for slot in SLOT_KEYS:
+        value = data.get(slot)
+        if value in SLOT_STATUSES:
+            state[slot] = value
+
+    requested_slot = data.get("requested_slot")
+    if requested_slot in SLOT_KEYS:
+        state["requested_slot"] = requested_slot
+
+    return state
+
+def sync_slot_state_with_filters(filters, slot_state=None):
+    state = slot_state_to_dict(slot_state)
+    filters = filters_to_dict(filters)
+
+    if filters.get("category"):
+        state["category"] = "filled"
+    elif state["category"] == "filled":
+        state["category"] = "unknown"
+
+    if filters.get("city"):
+        state["city"] = "filled"
+    elif state["city"] == "filled":
+        state["city"] = "unknown"
+
+    if filters.get("start_date") or filters.get("end_date"):
+        state["date"] = "filled"
+    elif state["date"] == "filled":
+        state["date"] = "unknown"
+
+    if state.get("requested_slot") and state[state["requested_slot"]] != "unknown":
+        state["requested_slot"] = None
+
+    return state
+
+def infer_requested_slot_from_messages(messages):
+    for message in reversed(messages):
+        if message.role != "assistant":
+            continue
+
+        content = normalize_text_for_intent(message.content)
+        if "tarih" in content or "zaman" in content or "hafta" in content:
+            return "date"
+        if "sehir" in content or "nerede" in content or "istanbul" in content:
+            return "city"
+        if "kategori" in content or "tur" in content or "etkinlik" in content or "atmosfer" in content:
+            return "category"
+
+    return None
+
+def user_accepts_any_for_slot(messages):
+    latest = normalize_text_for_intent(latest_user_message(messages))
+    any_phrases = [
+        "fark etmez",
+        "farketmez",
+        "onemli degil",
+        "önemli değil",
+        "herhangi",
+        "hepsi",
+        "tumu",
+        "tümü",
+        "bos gec",
+        "boş geç",
+    ]
+    if not any(phrase in latest for phrase in any_phrases):
+        return None
+
+    if "sehir" in latest or "neresi" in latest or "nerede" in latest:
+        return "city"
+    if "tarih" in latest or "zaman" in latest or "gun" in latest or "gün" in latest:
+        return "date"
+    if "kategori" in latest or "tur" in latest or "tür" in latest:
+        return "category"
+
+    return "requested"
+
+def apply_any_answer_to_slot_state(messages, slot_state):
+    state = slot_state_to_dict(slot_state)
+    accepted_slot = user_accepts_any_for_slot(messages)
+    if not accepted_slot:
+        return state
+
+    if accepted_slot == "requested":
+        accepted_slot = state.get("requested_slot") or infer_requested_slot_from_messages(messages)
+
+    if accepted_slot in SLOT_KEYS:
+        state[accepted_slot] = "any"
+        state["requested_slot"] = None
+
+    return state
+
+def next_unknown_slot(slot_state):
+    state = slot_state_to_dict(slot_state)
+    for slot in SLOT_KEYS:
+        if state[slot] == "unknown":
+            return slot
+    return None
+
+def slot_state_is_ready(slot_state):
+    state = slot_state_to_dict(slot_state)
+    return all(state[slot] in ["filled", "any"] for slot in SLOT_KEYS)
+
+def user_requested_no_search(messages):
+    latest = normalize_text_for_intent(latest_user_message(messages))
+    if latest in ["arama", "search etme", "dont search", "don't search"]:
+        return True
+
+    no_search_phrases = [
+        "arama yapma",
+        "henuz arama",
+        "henüz arama",
+        "simdi arama",
+        "şimdi arama",
+        "search etme",
+        "dont search",
+        "don't search",
+    ]
+    return any(phrase in latest for phrase in no_search_phrases)
+
+def user_explicitly_requests_search_anyway(messages):
+    latest = normalize_text_for_intent(latest_user_message(messages))
+    explicit_phrases = [
+        "direkt ara",
+        "ara gitsin",
+        "boyle ara",
+        "böyle ara",
+        "bu filtrelerle ara",
+        "genel ara",
+        "genis ara",
+        "geniş ara",
+        "hepsini ara",
+        "tumunu ara",
+        "tümünü ara",
+        "fark etmez ara",
+        "farketmez ara",
+    ]
+    return any(phrase in latest for phrase in explicit_phrases)
+
+def build_slot_follow_up_question(filters, slot_state):
+    missing_slot = next_unknown_slot(slot_state)
+    category = filters.get("category")
+    city = filters.get("city")
+
+    if missing_slot == "category":
+        return "Ne tür bir etkinlik olsun: konser, tiyatro, festival, stand-up ya da spor? Fark etmezse kategori seçmeden ilerleyebilirim."
+
+    if missing_slot == "city":
+        if category:
+            return f"{category} için hangi şehir olsun? Fark etmezse şehir filtresini boş geçebilirim."
+        return "Hangi şehirde bakalım? Fark etmezse şehir filtresini boş geçebilirim."
+
+    if missing_slot == "date":
+        if city and category:
+            return f"{city} için {category} aramasında tarih aralığı var mı, yoksa tarih fark etmez mi?"
+        if category:
+            return f"{category} için tarih aralığı var mı, yoksa tarih fark etmez mi?"
+        if city:
+            return f"{city} için tarih aralığı var mı, yoksa tarih fark etmez mi?"
+        return "Tarih aralığı var mı, yoksa tarih fark etmez mi?"
+
+    return "Tamam, bu bilgilerle arama yapabilirim."
+
+def detect_category_from_text(normalized_text):
+    for alias, category in CATEGORY_ALIASES.items():
+        if normalize_text_for_intent(alias) in normalized_text:
+            return category
+    return None
+
+def detect_city_from_text(normalized_text):
+    for city in KNOWN_CITIES:
+        if normalize_text_for_intent(city) in normalized_text:
+            return city
+    return None
+
+def latest_message_has_date_hint(normalized_text):
+    date_words = [
+        "bugun", "bugün", "yarin", "yarın", "hafta", "haftasonu", "hafta sonu",
+        "bu ay", "gelecek ay", "ocak", "subat", "şubat", "mart", "nisan", "mayis", "mayıs",
+        "haziran", "temmuz", "agustos", "ağustos", "eylul", "eylül", "ekim",
+        "kasim", "kasım", "aralik", "aralık", "pazartesi", "sali", "salı",
+        "carsamba", "çarşamba", "persembe", "perşembe", "cuma", "cumartesi",
+        "pazar",
+    ]
+    return any(word in normalized_text for word in date_words)
+
+def quick_filter_intent_from_message(messages, current_filters=None):
+    latest_original = latest_user_message(messages)
+    latest = normalize_text_for_intent(latest_original)
+    filters = empty_event_filters()
+
+    if not latest or latest_message_has_date_hint(latest):
+        return None
+
+    category = detect_category_from_text(latest)
+    city = detect_city_from_text(latest)
+    vague_search = any(
+        phrase in latest
+        for phrase in [
+            "eglenceli",
+            "eğlenceli",
+            "bir seyler",
+            "bir şeyler",
+            "ne var",
+            "oner",
+            "öner",
+            "etkinlik bak",
+            "etkinlik ara",
+        ]
+    )
+
+    if not category and not city and not vague_search:
+        return None
+
+    filters["category"] = category
+    filters["city"] = city
+
+    intent = "update_filters" if user_requested_no_search(messages) else "search_events"
+    assistant_reply = "Filtreleri aldım, kalan bilgileri netleştirelim."
+    if category and city:
+        assistant_reply = f"{city} ve {category} bilgisini aldım."
+    elif category:
+        assistant_reply = f"{category} bilgisini aldım."
+    elif city:
+        assistant_reply = f"{city} bilgisini aldım."
+
+    return normalize_ai_chat_intent(
+        {
+            "intent": intent,
+            "filters": filters,
+            "should_search": intent == "search_events",
+            "needs_clarification": True,
+            "assistant_reply": assistant_reply,
+        },
+        current_filters,
+    )
+
+def enforce_slot_filling(intent, messages, current_slot_state=None):
+    if intent.get("intent") == "reset_filters":
+        intent["slot_state"] = empty_slot_state()
+        intent["should_search"] = False
+        intent["needs_clarification"] = False
+        return intent
+
+    filters = filters_to_dict(intent.get("filters"))
+    slot_state = sync_slot_state_with_filters(filters, current_slot_state)
+    slot_state = apply_any_answer_to_slot_state(messages, slot_state)
+    slot_state = sync_slot_state_with_filters(filters, slot_state)
+
+    if intent.get("intent") in ["smalltalk", "help"]:
+        intent["slot_state"] = slot_state
+        intent["should_search"] = False
+        intent["needs_clarification"] = False
+        return intent
+
+    explicit_search_anyway = user_explicitly_requests_search_anyway(messages)
+    no_search_requested = user_requested_no_search(messages)
+    ready_to_search = slot_state_is_ready(slot_state)
+    missing_slot = next_unknown_slot(slot_state)
+
+    intent["filters"] = filters
+    intent["slot_state"] = slot_state
+
+    if no_search_requested:
+        intent["should_search"] = False
+        intent["needs_clarification"] = False
+        slot_state["requested_slot"] = missing_slot
+        intent["assistant_reply"] = intent.get("assistant_reply") or "Tamam, filtreleri güncelledim ama arama yapmıyorum."
+        return intent
+
+    if ready_to_search or explicit_search_anyway:
+        intent["intent"] = "search_events"
+        intent["should_search"] = True
+        intent["needs_clarification"] = False
+        slot_state["requested_slot"] = None
+        if not intent.get("assistant_reply"):
+            intent["assistant_reply"] = "Tamam, bu bilgilerle etkinliklere bakıyorum."
+        return intent
+
+    if missing_slot:
+        intent["should_search"] = False
+        intent["needs_clarification"] = True
+        slot_state["requested_slot"] = missing_slot
+        intent["assistant_reply"] = build_slot_follow_up_question(filters, slot_state)
+
+    return intent
+
 def latest_user_message(messages):
     for message in reversed(messages):
         if message.role == "user":
             return message.content.strip()
     return ""
 
+def normalize_text_for_intent(text):
+    return (
+        text.lower()
+        .replace("i̇", "i")
+        .replace("\u0307", "")
+        .replace("ı", "i")
+        .replace("ğ", "g")
+        .replace("ü", "u")
+        .replace("ş", "s")
+        .replace("ö", "o")
+        .replace("ç", "c")
+    )
+
+def prehandle_ai_chat_intent(messages, current_filters=None):
+    latest = normalize_text_for_intent(latest_user_message(messages))
+    filters = filters_to_dict(current_filters)
+
+    if not latest:
+        return None
+
+    reset_phrases = ["filtreleri temizle", "sifirla", "bastan basla", "temizle"]
+    if any(phrase in latest for phrase in reset_phrases):
+        return {
+            "intent": "reset_filters",
+            "filters": empty_event_filters(),
+            "should_search": False,
+            "needs_clarification": False,
+            "assistant_reply": "Filtreleri temizledim. Baştan başlayabiliriz.",
+        }
+
+    help_phrases = ["yardim", "nasil kullan", "ne yapabilirsin", "komut"]
+    if any(phrase in latest for phrase in help_phrases):
+        return {
+            "intent": "help",
+            "filters": filters,
+            "should_search": False,
+            "needs_clarification": False,
+            "assistant_reply": "Bana etkinlik türü, şehir veya tarih söyleyebilirsin. Eksik kalanları sırayla sorarım; 'fark etmez' dersen o filtreyi boş geçerim.",
+        }
+
+    if user_accepts_any_for_slot(messages):
+        should_search = user_explicitly_requests_search_anyway(messages)
+        return {
+            "intent": "search_events" if should_search else "update_filters",
+            "filters": filters,
+            "should_search": should_search,
+            "needs_clarification": not should_search,
+            "assistant_reply": "Tamam, o alanı boş geçiyorum.",
+        }
+
+    smalltalk_exact = [
+        "selam",
+        "merhaba",
+        "sa",
+        "naber",
+        "nabiyon",
+        "nabiyosun",
+        "napiyon",
+        "napiyosun",
+        "ne yapiyon",
+        "ne yapiyosun",
+        "nasilsin",
+        "tesekkurler",
+        "tesekkur ederim",
+    ]
+    search_words = ["konser", "tiyatro", "festival", "stand", "spor", "etkinlik", "bilet", "ara", "istanbul", "ankara", "izmir"]
+
+    if latest in smalltalk_exact or (
+        any(phrase in latest for phrase in smalltalk_exact)
+        and not any(word in latest for word in search_words)
+    ):
+        return {
+            "intent": "smalltalk",
+            "filters": filters,
+            "should_search": False,
+            "needs_clarification": False,
+            "assistant_reply": "Selam, buradayım. Etkinlik bakmak istersen tür, şehir veya tarih söyleyebilirsin.",
+        }
+
+    return None
+
 def user_allows_broad_search(messages):
-    latest = latest_user_message(messages).lower()
+    latest = normalize_text_for_intent(latest_user_message(messages))
     broad_phrases = [
         "fark etmez",
         "farketmez",
@@ -585,14 +1017,35 @@ def extract_ai_chat_intent(messages, current_filters=None):
         if message.content.strip()
     )
 
-    response = ollama_client.chat(
-        model=OLLAMA_MODEL,
-        messages=ollama_messages,
-        stream=False,
-        format=AI_CHAT_JSON_SCHEMA,
-        options={
-            "temperature": 0
-        }
+    logger.info(
+        "AI chat Ollama call starting: model=%s host=%s timeout=%ss message_count=%s",
+        OLLAMA_MODEL,
+        OLLAMA_HOST,
+        OLLAMA_TIMEOUT_SECONDS,
+        len(ollama_messages),
+    )
+    started_at = time.monotonic()
+
+    try:
+        response = ollama_client.chat(
+            model=OLLAMA_MODEL,
+            messages=ollama_messages,
+            stream=False,
+            format=AI_CHAT_JSON_SCHEMA,
+            options={
+                "temperature": 0
+            }
+        )
+    except Exception:
+        logger.exception(
+            "AI chat Ollama call failed after %.2fs",
+            time.monotonic() - started_at,
+        )
+        raise
+
+    logger.info(
+        "AI chat Ollama call finished in %.2fs",
+        time.monotonic() - started_at,
     )
 
     llm_output = response["message"]["content"].strip()
@@ -626,37 +1079,106 @@ def ai_chat_events(request: AIChatRequest, db: Session = Depends(get_db)):
         )
 
     current_filters = filters_to_dict(request.current_filters)
+    current_slot_state = sync_slot_state_with_filters(
+        current_filters,
+        request.slot_state,
+    )
+    latest_message = latest_user_message(request.messages)
 
-    try:
-        intent = extract_ai_chat_intent(request.messages, current_filters)
-        intent = enforce_search_readiness(intent, request.messages)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Yapay zeka sohbet analizi başarısız oldu: {str(e)}"
+    logger.info(
+        "AI chat request received: latest=%r current_filters=%s slot_state=%s",
+        latest_message,
+        current_filters,
+        current_slot_state,
+    )
+
+    prehandled_intent = prehandle_ai_chat_intent(request.messages, current_filters)
+
+    if prehandled_intent:
+        intent = enforce_slot_filling(
+            prehandled_intent,
+            request.messages,
+            current_slot_state,
         )
+        logger.info(
+            "AI chat prehandled intent resolved: intent=%s should_search=%s needs_clarification=%s slot_state=%s",
+            intent["intent"],
+            intent["should_search"],
+            intent["needs_clarification"],
+            intent["slot_state"],
+        )
+    else:
+        quick_intent = quick_filter_intent_from_message(request.messages, current_filters)
+        if quick_intent:
+            intent = enforce_slot_filling(
+                quick_intent,
+                request.messages,
+                current_slot_state,
+            )
+            logger.info(
+                "AI chat quick intent handled: intent=%s should_search=%s needs_clarification=%s filters=%s slot_state=%s",
+                intent["intent"],
+                intent["should_search"],
+                intent["needs_clarification"],
+                intent["filters"],
+                intent["slot_state"],
+            )
+        else:
+            logger.info("AI chat falling back to LLM extraction")
+            try:
+                intent = extract_ai_chat_intent(request.messages, current_filters)
+                intent = enforce_slot_filling(intent, request.messages, current_slot_state)
+            except Exception as e:
+                logger.exception("AI chat analysis failed before response")
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "message": "AI sohbet servisi şu anda yanıt vermiyor. Lütfen biraz sonra tekrar deneyin.",
+                        "error_code": "AI_CHAT_UNAVAILABLE",
+                        "technical_error": str(e),
+                    },
+                )
 
     filters = intent["filters"]
 
     if intent.get("needs_clarification") or not intent.get("should_search"):
+        logger.info(
+            "AI chat clarification/no-search response returning: intent=%s should_search=%s needs_clarification=%s filters=%s slot_state=%s",
+            intent["intent"],
+            intent["should_search"],
+            intent["needs_clarification"],
+            filters,
+            intent["slot_state"],
+        )
         return {
             "reply": build_ai_chat_reply([], intent),
             "intent": intent["intent"],
             "filters_applied": filters,
             "events": [],
             "should_search": False,
-            "needs_clarification": intent["needs_clarification"]
+            "needs_clarification": intent["needs_clarification"],
+            "slot_state": intent["slot_state"],
         }
 
+    logger.info("AI chat DB query starting: filters=%s", filters)
     events = query_events_by_filters(db, filters)
+    logger.info("AI chat DB query finished: count=%s", len(events))
 
+    logger.info(
+        "AI chat search response returning: intent=%s should_search=True needs_clarification=False filters=%s slot_state=%s event_count=%s",
+        intent["intent"],
+        filters,
+        intent["slot_state"],
+        len(events),
+    )
     return {
         "reply": build_ai_chat_search_reply(events, intent),
         "intent": intent["intent"],
         "filters_applied": filters,
         "events": events,
         "should_search": True,
-        "needs_clarification": False
+        "needs_clarification": False,
+        "slot_state": intent["slot_state"],
     }
 
 @router.post("/")

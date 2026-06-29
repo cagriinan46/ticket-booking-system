@@ -21,6 +21,7 @@ function Navbar() {
   const [isAiSearching, setIsAiSearching] = useState(false);
   const [aiEvents, setAiEvents] = useState([]);
   const [aiFiltersApplied, setAiFiltersApplied] = useState(null);
+  const [aiSlotState, setAiSlotState] = useState(null);
   const [aiNeedsClarification, setAiNeedsClarification] = useState(false);
   const [aiShouldSearch, setAiShouldSearch] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -76,26 +77,65 @@ function Navbar() {
     }
   };
 
-  const requestAiChat = async (prompt, nextMessages, currentFilters) => {
-    const response = await fetch(`${backendUrl}/api/events/ai-chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: nextMessages.map(message => ({
-          role: message.role,
-          content: message.content
-        })),
-        current_filters: currentFilters
-      })
-    });
+  const getApiErrorMessage = (data, fallback) => {
+    if (typeof data?.detail === 'string') return data.detail;
+    if (typeof data?.detail?.message === 'string') return data.detail.message;
+    if (typeof data?.message === 'string') return data.message;
+    return fallback;
+  };
+
+  const requestAiChat = async (prompt, nextMessages, currentFilters, currentSlotState) => {
+    if (!backendUrl) {
+      console.error("AI chat backend URL tanımlı değil", { backendUrl });
+      throw new Error("AI servisi için backend adresi tanımlı değil.");
+    }
+
+    const aiChatUrl = `${backendUrl}/api/events/ai-chat`;
+    let response;
+
+    try {
+      response = await fetch(aiChatUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: nextMessages.map(message => ({
+            role: message.role,
+            content: message.content
+          })),
+          current_filters: currentFilters,
+          slot_state: currentSlotState
+        })
+      });
+    } catch (err) {
+      console.error("AI chat fetch başarısız oldu", {
+        url: aiChatUrl,
+        backendUrl,
+        prompt,
+        error: err
+      });
+      throw new Error("AI servisine ulaşılamıyor. Backend bağlantısı veya CORS ayarlarını kontrol edin.");
+    }
+
     const data = await readApiResponse(response);
 
     if (response.status === 405) {
+      console.error("AI chat endpoint method hatası", {
+        url: aiChatUrl,
+        status: response.status,
+        statusText: response.statusText,
+        responseBody: data
+      });
       throw new Error("AI chat endpoint'i backend'de aktif değil. Yeni /api/events/ai-chat kodunu deploy etmek gerekiyor.");
     }
 
     if (!response.ok) {
-      throw new Error(data.detail || "Yapay zeka aramasında bir hata oluştu.");
+      console.error("AI chat backend hata döndü", {
+        url: aiChatUrl,
+        status: response.status,
+        statusText: response.statusText,
+        responseBody: data
+      });
+      throw new Error(getApiErrorMessage(data, "AI sohbetinde bir hata oluştu."));
     }
 
     return data;
@@ -108,6 +148,7 @@ function Navbar() {
     const userMessage = { role: 'user', content: prompt };
     const nextMessages = [...aiMessages, userMessage];
     const currentFilters = aiFiltersApplied;
+    const currentSlotState = aiSlotState;
 
     setAiMessages(nextMessages);
     setAiInput('');
@@ -118,7 +159,7 @@ function Navbar() {
     setHasSearched(true);
     
     try {
-      const data = await requestAiChat(prompt, nextMessages, currentFilters);
+      const data = await requestAiChat(prompt, nextMessages, currentFilters, currentSlotState);
 
       const foundEvents = Array.isArray(data.events) ? data.events : [];
       const shouldSearch = Boolean(data.should_search);
@@ -130,6 +171,7 @@ function Navbar() {
       setAiMessages([...nextMessages, assistantMessage]);
       setAiEvents(foundEvents);
       setAiFiltersApplied(data.filters_applied || data.llm_extracted_data || null);
+      setAiSlotState(data.slot_state || null);
       setAiNeedsClarification(Boolean(data.needs_clarification));
       setAiShouldSearch(shouldSearch);
       
@@ -148,11 +190,17 @@ function Navbar() {
       }
       
     } catch (err) {
+      console.error("AI chat modal isteği tamamlanamadı", {
+        backendUrl,
+        prompt,
+        error: err
+      });
+      const errorMessage = err.message || "AI sohbetinde bir hata oluştu.";
       setAiMessages([
         ...nextMessages,
-        { role: 'assistant', content: err.message }
+        { role: 'assistant', content: errorMessage }
       ]);
-      toast.error(err.message);
+      toast.error(errorMessage);
     } finally {
       setIsAiSearching(false);
     }
@@ -388,7 +436,7 @@ function Navbar() {
               {isAiSearching ? (
                 <div className="py-20 text-center">
                   <div className="inline-block w-12 h-12 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin mb-4"></div>
-                  <p className="text-orange-500 font-extrabold text-xl animate-pulse">Sizin için en iyi etkinlikler taranıyor...</p>
+                  <p className="text-orange-500 font-extrabold text-xl animate-pulse">Asistan yanıt hazırlıyor...</p>
                 </div>
               ) : hasSearched && aiNeedsClarification ? (
                 <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm">
