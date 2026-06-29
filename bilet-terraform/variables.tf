@@ -57,5 +57,5 @@ variable "ollama_instance_type" {
 variable "app_branch" {
   description = "Git branch to deploy on EC2 instances"
   type        = string
-  default     = "feature/local-llm"
+  default     = "feature/ai-chatbot"
 }
