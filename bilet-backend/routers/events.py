@@ -7,13 +7,14 @@ from fastapi import HTTPException
 from dotenv import load_dotenv
 from typing import Literal, Optional
 from sqlalchemy import text
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import joinedload
 from datetime import date
 from ollama import Client
 import models
 import iyzipay
 import boto3
+import calendar as calendar_module
 import json
 import logging
 import os
@@ -140,6 +141,26 @@ CATEGORY_ALIASES = {
     "spor": "Spor",
     "mac": "Spor",
     "maç": "Spor",
+}
+MONTH_ALIASES = {
+    "ocak": 1,
+    "subat": 2,
+    "şubat": 2,
+    "mart": 3,
+    "nisan": 4,
+    "mayis": 5,
+    "mayıs": 5,
+    "haziran": 6,
+    "temmuz": 7,
+    "agustos": 8,
+    "ağustos": 8,
+    "eylul": 9,
+    "eylül": 9,
+    "ekim": 10,
+    "kasim": 11,
+    "kasım": 11,
+    "aralik": 12,
+    "aralık": 12,
 }
 KNOWN_CITIES = [
     "Adana", "Adıyaman", "Afyonkarahisar", "Ağrı", "Amasya", "Ankara", "Antalya",
@@ -476,27 +497,102 @@ def detect_city_from_text(normalized_text):
             return city
     return None
 
+def year_for_month(month, today=None):
+    today = today or date.today()
+    if today.month <= month:
+        return today.year
+    return today.year + 1
+
+def month_date_range(month, week_number=None, today=None):
+    year = year_for_month(month, today)
+    last_day = calendar_module.monthrange(year, month)[1]
+
+    if week_number:
+        start_day = min(1 + ((week_number - 1) * 7), last_day)
+        end_day = min(start_day + 6, last_day)
+    else:
+        start_day = 1
+        end_day = last_day
+
+    return {
+        "start_date": date(year, month, start_day).isoformat(),
+        "end_date": date(year, month, end_day).isoformat(),
+    }
+
+def detect_week_number_from_text(normalized_text):
+    week_phrases = [
+        (1, ["ilk hafta", "birinci hafta", "1. hafta", "1 hafta"]),
+        (2, ["ikinci hafta", "2. hafta"]),
+        (3, ["ucuncu hafta", "üçüncü hafta", "3. hafta"]),
+        (4, ["dorduncu hafta", "dördüncü hafta", "4. hafta", "son hafta"]),
+    ]
+
+    for week_number, phrases in week_phrases:
+        if any(normalize_text_for_intent(phrase) in normalized_text for phrase in phrases):
+            return week_number
+
+    return None
+
+def detect_date_range_from_text(normalized_text):
+    today = date.today()
+
+    if "bugun" in normalized_text or "bugün" in normalized_text:
+        return {
+            "start_date": today.isoformat(),
+            "end_date": today.isoformat(),
+        }
+
+    if "yarin" in normalized_text or "yarın" in normalized_text:
+        tomorrow = today + timedelta(days=1)
+        return {
+            "start_date": tomorrow.isoformat(),
+            "end_date": tomorrow.isoformat(),
+        }
+
+    if "gelecek hafta" in normalized_text:
+        start = today + timedelta(days=7)
+        end = start + timedelta(days=6)
+        return {
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+        }
+
+    if "bu hafta" in normalized_text or "hafta sonu" in normalized_text or "haftasonu" in normalized_text:
+        end = today + timedelta(days=6)
+        return {
+            "start_date": today.isoformat(),
+            "end_date": end.isoformat(),
+        }
+
+    week_number = detect_week_number_from_text(normalized_text)
+    for month_name, month_number in MONTH_ALIASES.items():
+        if normalize_text_for_intent(month_name) in normalized_text:
+            return month_date_range(month_number, week_number)
+
+    return None
+
 def latest_message_has_date_hint(normalized_text):
     date_words = [
         "bugun", "bugün", "yarin", "yarın", "hafta", "haftasonu", "hafta sonu",
-        "bu ay", "gelecek ay", "ocak", "subat", "şubat", "mart", "nisan", "mayis", "mayıs",
-        "haziran", "temmuz", "agustos", "ağustos", "eylul", "eylül", "ekim",
-        "kasim", "kasım", "aralik", "aralık", "pazartesi", "sali", "salı",
+        "bu ay", "gelecek ay", "pazartesi", "sali", "salı",
         "carsamba", "çarşamba", "persembe", "perşembe", "cuma", "cumartesi",
         "pazar",
     ]
-    return any(word in normalized_text for word in date_words)
+    month_words = [normalize_text_for_intent(month_name) for month_name in MONTH_ALIASES]
+    return any(word in normalized_text for word in date_words + month_words)
 
 def quick_filter_intent_from_message(messages, current_filters=None):
     latest_original = latest_user_message(messages)
     latest = normalize_text_for_intent(latest_original)
     filters = empty_event_filters()
 
-    if not latest or latest_message_has_date_hint(latest):
+    if not latest:
         return None
 
     category = detect_category_from_text(latest)
     city = detect_city_from_text(latest)
+    date_range = detect_date_range_from_text(latest)
+    has_date_hint = latest_message_has_date_hint(latest)
     vague_search = any(
         phrase in latest
         for phrase in [
@@ -512,20 +608,34 @@ def quick_filter_intent_from_message(messages, current_filters=None):
         ]
     )
 
-    if not category and not city and not vague_search:
+    if has_date_hint and not date_range and not category and not city and not vague_search:
+        return None
+
+    if not category and not city and not date_range and not vague_search:
         return None
 
     filters["category"] = category
     filters["city"] = city
+    if date_range:
+        filters["start_date"] = date_range["start_date"]
+        filters["end_date"] = date_range["end_date"]
 
     intent = "update_filters" if user_requested_no_search(messages) else "search_events"
     assistant_reply = "Filtreleri aldım, kalan bilgileri netleştirelim."
-    if category and city:
+    if city and category and date_range:
+        assistant_reply = f"{city}, {category} ve tarih aralığını aldım."
+    elif city and category:
         assistant_reply = f"{city} ve {category} bilgisini aldım."
+    elif city and date_range:
+        assistant_reply = f"{city} ve tarih aralığını aldım."
+    elif category and date_range:
+        assistant_reply = f"{category} ve tarih aralığını aldım."
     elif category:
         assistant_reply = f"{category} bilgisini aldım."
     elif city:
         assistant_reply = f"{city} bilgisini aldım."
+    elif date_range:
+        assistant_reply = "Tarih aralığını aldım."
 
     return normalize_ai_chat_intent(
         {
@@ -614,7 +724,16 @@ def prehandle_ai_chat_intent(messages, current_filters=None):
     if not latest:
         return None
 
-    reset_phrases = ["filtreleri temizle", "sifirla", "bastan basla", "temizle"]
+    reset_phrases = [
+        "filtreleri temizle",
+        "filtreleri sil",
+        "butun filtreleri sil",
+        "tum filtreleri sil",
+        "hepsini sil",
+        "sifirla",
+        "bastan basla",
+        "temizle",
+    ]
     if any(phrase in latest for phrase in reset_phrases):
         return {
             "intent": "reset_filters",
@@ -622,6 +741,24 @@ def prehandle_ai_chat_intent(messages, current_filters=None):
             "should_search": False,
             "needs_clarification": False,
             "assistant_reply": "Filtreleri temizledim. Baştan başlayabiliriz.",
+        }
+
+    meta_stop_phrases = [
+        "yanit hazirla demedim",
+        "cevap hazirla demedim",
+        "arama demedim",
+        "arama yap demedim",
+        "arama yapma",
+        "bekle",
+        "dur",
+    ]
+    if any(phrase in latest for phrase in meta_stop_phrases):
+        return {
+            "intent": "smalltalk",
+            "filters": filters,
+            "should_search": False,
+            "needs_clarification": False,
+            "assistant_reply": "Tamam, arama yapmıyorum. İstersen filtreleri temizleyebilir veya yeni kriterleri yazabilirsin.",
         }
 
     help_phrases = ["yardim", "nasil kullan", "ne yapabilirsin", "komut"]
@@ -887,9 +1024,6 @@ def build_ai_chat_search_reply(events, intent):
         if filter_text:
             return f"{filter_text} için {len(events)} etkinlik buldum."
         return f"Aramana uygun {len(events)} etkinlik buldum."
-
-    if intent.get("assistant_reply"):
-        return intent["assistant_reply"]
 
     if filter_text:
         return f"{filter_text} kriterlerine uygun etkinlik bulamadım. İstersen filtreleri genişletebiliriz."
@@ -1254,7 +1388,7 @@ def ticket_transfer(payload: TicketTransferSchema, db: Session = Depends(get_db)
 def get_my_favorites(current_user: models.User = Depends(get_current_user)):
     return current_user.favorite_events
 
-@router.get("/{event_id}", response_model=EventSchema)
+@router.get("/{event_id:int}", response_model=EventSchema)
 def get_single_event(event_id: int, db: Session = Depends(get_db)):
     event = db.query(models.Event).filter(models.Event.id == event_id).first()
 
@@ -1266,7 +1400,7 @@ def get_single_event(event_id: int, db: Session = Depends(get_db)):
 
     return event
 
-@router.post("/buy/{event_id}")
+@router.post("/buy/{event_id:int}")
 def buy_ticket(event_id: int, payment_data: PaymentRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     event = db.query(models.Event).filter(models.Event.id == event_id).first()
 
@@ -1363,7 +1497,7 @@ def buy_ticket(event_id: int, payment_data: PaymentRequest, db: Session = Depend
 
     return {"mesaj": f"Ödeme başarıyla alındı, {current_user.email} adlı kullanıcı {event.title} etkinliğine başarıyla bilet aldı!"}
 
-@router.delete("/{event_id}")
+@router.delete("/{event_id:int}")
 def delete_event(event_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Bu islem icin yetkiniz yok!")
@@ -1380,7 +1514,7 @@ def delete_event(event_id: int, current_user: models.User = Depends(get_current_
 
     return {"mesaj": "Etkinlik basariyla silindi!"}
 
-@router.post("/toggle-favorite/{event_id}")
+@router.post("/toggle-favorite/{event_id:int}")
 def toggle_favorite(event_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
 
@@ -1402,7 +1536,7 @@ def toggle_favorite(event_id: int, db: Session = Depends(get_db), current_user: 
     else:
         return {"mesaj": "Etkinlik favorilerden cikarildi!", "status": "removed"}
 
-@router.post("/{event_id}/reviews")
+@router.post("/{event_id:int}/reviews")
 def create_review(event_id: int, review: ReviewCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
 
@@ -1437,7 +1571,7 @@ def create_review(event_id: int, review: ReviewCreate, db: Session = Depends(get
 
     return {"mesaj": "Degerlendirmeniz basariyla eklendi!"}
 
-@router.get("/{event_id}/reviews")
+@router.get("/{event_id:int}/reviews")
 def get_all_reviews(event_id: int, db: Session = Depends(get_db)):
     current_event = db.query(models.Event).filter(models.Event.id == event_id).first()
 
@@ -1454,7 +1588,7 @@ def get_all_reviews(event_id: int, db: Session = Depends(get_db)):
 
     return all_reviews
 
-@router.get("/{id}/calendar")
+@router.get("/{id:int}/calendar")
 def calendar(id: int, db: Session = Depends(get_db)):
     db_event = db.query(models.Event).filter(models.Event.id == id).first()
 
@@ -1480,7 +1614,7 @@ END:VCALENDAR"""
         headers={"Content-Disposition": f"attachment; filename=portabilet_etkinlik_{id}.ics"}
         )
 
-@router.get("/{event_id}/weather")
+@router.get("/{event_id:int}/weather")
 def get_event_weather(event_id: int, db: Session = Depends(get_db)):
     event = db.query(models.Event).filter(models.Event.id == event_id).first()
 
@@ -1519,7 +1653,7 @@ def get_event_weather(event_id: int, db: Session = Depends(get_db)):
         except Exception as e:
             return {"status": "error", "message": f"Hava durumu cekilemedi: {str(e)}"}
         
-@router.get("/{event_id}/recommendations", response_model=list[EventSchema])
+@router.get("/{event_id:int}/recommendations", response_model=list[EventSchema])
 def get_recommendations(event_id: int, db: Session = Depends(get_db)):
     event = db.query(models.Event).filter(models.Event.id == event_id).first()
 

@@ -12,6 +12,20 @@ from routers import events
 
 
 class AIChatHelpersTest(unittest.TestCase):
+    def test_event_id_routes_are_int_constrained_so_ai_chat_is_not_parsed_as_event_id(self):
+        dynamic_event_routes = [
+            route.path
+            for route in events.router.routes
+            if "{event_id" in route.path or "{id" in route.path
+        ]
+
+        self.assertIn("/api/events/{event_id:int}", dynamic_event_routes)
+        self.assertIn("/api/events/{event_id:int}/reviews", dynamic_event_routes)
+        self.assertIn("/api/events/{id:int}/calendar", dynamic_event_routes)
+        for route_path in dynamic_event_routes:
+            self.assertNotIn("{event_id}", route_path)
+            self.assertNotIn("{id}", route_path)
+
     def test_normalize_ai_intent_cleans_filters_and_preserves_follow_up(self):
         payload = {
             "city": "null",
@@ -393,6 +407,50 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertEqual(response["slot_state"]["requested_slot"], "date")
         self.assertIn("tarih", response["reply"].lower())
 
+    def test_ai_chat_turns_august_first_week_reply_into_date_filters(self):
+        today = events.date.today()
+        expected_year = today.year if today.month <= 8 else today.year + 1
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="assistant", content="Ankara için tarih aralığı var mı, yoksa tarih fark etmez mi?"),
+                events.AIChatMessage(role="user", content="var kankam agustosun ilk haftasi için bakalım")
+            ],
+            current_filters=events.AIChatFilters(city="Ankara"),
+            slot_state=events.AIChatSlotState(
+                category="any",
+                city="filled",
+                date="unknown",
+                requested_slot="date",
+            ),
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+
+        observed_filters = {}
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                AssertionError("LLM should not be needed for common date phrases")
+            )
+
+            def fake_query(db, filters):
+                observed_filters.update(filters)
+                return [object()]
+
+            events.query_events_by_filters = fake_query
+
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertTrue(response["should_search"])
+        self.assertEqual(response["slot_state"]["date"], "filled")
+        self.assertEqual(response["filters_applied"]["city"], "Ankara")
+        self.assertEqual(response["filters_applied"]["start_date"], f"{expected_year}-08-01")
+        self.assertEqual(response["filters_applied"]["end_date"], f"{expected_year}-08-07")
+        self.assertEqual(observed_filters["start_date"], f"{expected_year}-08-01")
+
     def test_ai_chat_smalltalk_does_not_turn_into_search_prompt(self):
         request = events.AIChatRequest(
             messages=[
@@ -458,6 +516,72 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertFalse(response["needs_clarification"])
         self.assertEqual(response["events"], [])
         self.assertIn("Selam", response["reply"])
+
+    def test_ai_chat_resets_filters_for_delete_all_filters_phrase_without_llm(self):
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="user", content="butun filtreleri sil")
+            ],
+            current_filters=events.AIChatFilters(city="Ankara", category="Konser"),
+            slot_state=events.AIChatSlotState(
+                category="filled",
+                city="filled",
+                date="unknown",
+                requested_slot="date",
+            ),
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                AssertionError("LLM should not be called for reset")
+            )
+            events.query_events_by_filters = lambda db, filters: (_ for _ in ()).throw(
+                AssertionError("Database should not be queried for reset")
+            )
+
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertEqual(response["intent"], "reset_filters")
+        self.assertFalse(response["should_search"])
+        self.assertFalse(response["needs_clarification"])
+        self.assertEqual(response["filters_applied"], events.empty_event_filters())
+        self.assertEqual(response["slot_state"], events.empty_slot_state())
+
+    def test_ai_chat_meta_complaint_does_not_call_llm_or_database(self):
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="user", content="yanit hazirla demedim")
+            ],
+            current_filters=events.AIChatFilters(city="Ankara"),
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                AssertionError("LLM should not be called for meta complaint")
+            )
+            events.query_events_by_filters = lambda db, filters: (_ for _ in ()).throw(
+                AssertionError("Database should not be queried for meta complaint")
+            )
+
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertEqual(response["intent"], "smalltalk")
+        self.assertFalse(response["should_search"])
+        self.assertFalse(response["needs_clarification"])
+        self.assertEqual(response["filters_applied"]["city"], "Ankara")
+        self.assertIn("arama yapmıyorum", response["reply"].lower())
 
     def test_ai_chat_queries_database_when_all_slots_are_ready(self):
         request = events.AIChatRequest(
