@@ -509,6 +509,121 @@ class AIChatHelpersTest(unittest.TestCase):
             "end_date": expected_date,
         })
 
+    def test_ai_chat_parses_same_month_date_range_before_single_day(self):
+        today = events.date.today()
+        expected_year = today.year if today.month <= 7 else today.year + 1
+        normalized = events.normalize_text_for_intent("1 temmuz 15 temmuz arasi")
+
+        date_range = events.detect_date_range_from_text(normalized)
+
+        self.assertEqual(date_range, {
+            "start_date": f"{expected_year}-07-01",
+            "end_date": f"{expected_year}-07-15",
+        })
+
+    def test_ai_chat_parses_cross_month_date_range(self):
+        today = events.date.today()
+        july_year = today.year if today.month <= 7 else today.year + 1
+        august_year = today.year if today.month <= 8 else today.year + 1
+        normalized = events.normalize_text_for_intent("1 temmuz 30 agustos arasina bak o zaman")
+
+        date_range = events.detect_date_range_from_text(normalized)
+
+        self.assertEqual(date_range, {
+            "start_date": f"{july_year}-07-01",
+            "end_date": f"{august_year}-08-30",
+        })
+
+    def test_ai_chat_updates_existing_date_range_without_llm(self):
+        today = events.date.today()
+        july_year = today.year if today.month <= 7 else today.year + 1
+        august_year = today.year if today.month <= 8 else today.year + 1
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="user", content="1 temmuz 30 agustos arasina bak o zaman")
+            ],
+            current_filters=events.AIChatFilters(
+                city="Ankara",
+                start_date=f"{july_year}-07-01",
+                end_date=f"{july_year}-07-15",
+            ),
+            slot_state=events.AIChatSlotState(
+                category="any",
+                city="filled",
+                date="filled",
+                requested_slot=None,
+            ),
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+        observed_filters = {}
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                AssertionError("LLM should not be needed for common date range updates")
+            )
+
+            def fake_query(db, filters):
+                observed_filters.update(filters)
+                return []
+
+            events.query_events_by_filters = fake_query
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertTrue(response["should_search"])
+        self.assertEqual(response["filters_applied"]["city"], "Ankara")
+        self.assertEqual(response["filters_applied"]["start_date"], f"{july_year}-07-01")
+        self.assertEqual(response["filters_applied"]["end_date"], f"{august_year}-08-30")
+        self.assertEqual(observed_filters["end_date"], f"{august_year}-08-30")
+
+    def test_ai_chat_broadens_existing_filters_without_llm(self):
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="user", content="tabi genisletelim")
+            ],
+            current_filters=events.AIChatFilters(
+                city="Ankara",
+                start_date="2026-07-01",
+                end_date="2026-07-15",
+            ),
+            slot_state=events.AIChatSlotState(
+                category="any",
+                city="filled",
+                date="filled",
+                requested_slot=None,
+            ),
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+        observed_filters = {}
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                AssertionError("LLM should not be called for broadening")
+            )
+
+            def fake_query(db, filters):
+                observed_filters.update(filters)
+                return [object()]
+
+            events.query_events_by_filters = fake_query
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        self.assertTrue(response["should_search"])
+        self.assertEqual(response["filters_applied"]["city"], "Ankara")
+        self.assertIsNone(response["filters_applied"]["start_date"])
+        self.assertIsNone(response["filters_applied"]["end_date"])
+        self.assertEqual(response["slot_state"]["date"], "any")
+        self.assertIsNone(observed_filters["start_date"])
+
     def test_ai_chat_smalltalk_does_not_turn_into_search_prompt(self):
         request = events.AIChatRequest(
             messages=[
@@ -677,7 +792,7 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertEqual(response["filters_applied"]["city"], "İstanbul")
         self.assertEqual(response["slot_state"]["date"], "filled")
 
-    def test_ai_chat_returns_controlled_http_error_when_llm_fails(self):
+    def test_ai_chat_returns_fallback_reply_when_llm_fails(self):
         request = events.AIChatRequest(
             messages=[
                 events.AIChatMessage(role="user", content="açık havada güzel bir plan istiyorum")
@@ -685,23 +800,26 @@ class AIChatHelpersTest(unittest.TestCase):
         )
 
         original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
 
         try:
             events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
                 TimeoutError("ollama timed out")
             )
+            events.query_events_by_filters = lambda db, filters: (_ for _ in ()).throw(
+                AssertionError("Database should not be queried when LLM fallback is used")
+            )
 
-            with self.assertRaises(events.HTTPException) as raised:
-                events.ai_chat_events(request, db=object())
+            response = events.ai_chat_events(request, db=object())
         finally:
             events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
 
-        self.assertEqual(raised.exception.status_code, 503)
-        self.assertEqual(
-            raised.exception.detail["message"],
-            "AI sohbet servisi şu anda yanıt vermiyor. Lütfen biraz sonra tekrar deneyin.",
-        )
-        self.assertEqual(raised.exception.detail["error_code"], "AI_CHAT_UNAVAILABLE")
+        self.assertEqual(response["intent"], "help")
+        self.assertFalse(response["should_search"])
+        self.assertTrue(response["needs_clarification"])
+        self.assertEqual(response["events"], [])
+        self.assertIn("şu an yavaşladı", response["reply"])
 
     def test_ai_search_keeps_existing_shape_and_adds_filters_applied(self):
         request = events.AISearchRequest(prompt="İstanbul'da konser var mı?")

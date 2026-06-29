@@ -447,6 +447,50 @@ def is_meta_stop_request(normalized_text):
 
     return "arama" in normalized_text and contains_any(normalized_text, ["yapma", "etme"])
 
+def is_broaden_request(normalized_text):
+    return contains_any(
+        normalized_text,
+        [
+            "genislet",
+            "genisletelim",
+            "genisletebiliriz",
+            "daha genis",
+            "daha geniş",
+            "filtreleri genis",
+            "filtreleri geniş",
+        ],
+    )
+
+def build_broaden_intent(current_filters):
+    filters = filters_to_dict(current_filters)
+    broadened_slot = None
+    reply = "Aramayı genişletiyorum."
+
+    if filters.get("start_date") or filters.get("end_date"):
+        filters["start_date"] = None
+        filters["end_date"] = None
+        broadened_slot = "date"
+        reply = "Tarih filtresini kaldırıp daha geniş bakıyorum."
+    elif filters.get("category"):
+        filters["category"] = None
+        broadened_slot = "category"
+        reply = "Kategori filtresini kaldırıp daha geniş bakıyorum."
+    elif filters.get("city"):
+        filters["city"] = None
+        broadened_slot = "city"
+        reply = "Şehir filtresini kaldırıp daha geniş bakıyorum."
+    else:
+        reply = "Filtre yok, tüm etkinliklere genel bakıyorum."
+
+    return {
+        "intent": "search_events",
+        "filters": filters,
+        "should_search": True,
+        "needs_clarification": False,
+        "assistant_reply": reply,
+        "broadening_slot": broadened_slot,
+    }
+
 def user_requested_no_search(messages):
     latest = normalize_text_for_intent(latest_user_message(messages))
     if latest in ["arama", "search etme", "dont search", "don't search"]:
@@ -518,6 +562,25 @@ def month_date_range(month, week_number=None, today=None):
         "end_date": date(year, month, end_day).isoformat(),
     }
 
+def date_range_from_day_months(start_day, start_month, end_day, end_month):
+    start_year = year_for_month(start_month)
+    end_year = year_for_month(end_month)
+
+    start_last_day = calendar_module.monthrange(start_year, start_month)[1]
+    end_last_day = calendar_module.monthrange(end_year, end_month)[1]
+    if start_day < 1 or start_day > start_last_day or end_day < 1 or end_day > end_last_day:
+        return None
+
+    start = date(start_year, start_month, start_day)
+    end = date(end_year, end_month, end_day)
+    if end < start:
+        end = date(end.year + 1, end.month, end.day)
+
+    return {
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+    }
+
 def detect_week_number_from_text(normalized_text):
     week_phrases = [
         (1, ["ilk hafta", "birinci hafta", "1. hafta", "1 hafta"]),
@@ -538,12 +601,78 @@ def normalized_month_aliases():
         aliases[normalize_text_for_intent(month_name)] = month_number
     return aliases
 
-def detect_specific_day_month_from_text(normalized_text):
+def month_regex_pattern():
     aliases = normalized_month_aliases()
-    month_pattern = "|".join(
+    return "|".join(
         re.escape(month_name)
         for month_name in sorted(aliases, key=len, reverse=True)
     )
+
+def detect_compact_same_month_range(normalized_text):
+    aliases = normalized_month_aliases()
+    month_pattern = month_regex_pattern()
+    pattern = rf"\b([0-3]?\d)\s*(?:-|/|ile|ve)\s*([0-3]?\d)\s*({month_pattern})\w*\b"
+    match = re.search(pattern, normalized_text)
+    if not match:
+        return None
+
+    start_day = int(match.group(1))
+    end_day = int(match.group(2))
+    month = aliases[match.group(3)]
+    return date_range_from_day_months(start_day, month, end_day, month)
+
+def day_month_mentions(normalized_text):
+    aliases = normalized_month_aliases()
+    month_pattern = month_regex_pattern()
+    mentions = []
+
+    patterns = [
+        rf"\b([0-3]?\d)\s*(?:\.|-)?\s*({month_pattern})\w*\b",
+    ]
+
+    seen_spans = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, normalized_text):
+            if match.span() in seen_spans:
+                continue
+            seen_spans.add(match.span())
+            first, second = match.groups()
+            if first.isdigit():
+                day = int(first)
+                month = aliases[second]
+            else:
+                month = aliases[first]
+                day = int(second)
+            mentions.append({
+                "day": day,
+                "month": month,
+                "index": match.start(),
+            })
+
+    return sorted(mentions, key=lambda item: item["index"])
+
+def detect_explicit_date_range_from_text(normalized_text):
+    compact_range = detect_compact_same_month_range(normalized_text)
+    if compact_range:
+        return compact_range
+
+    range_words = ["arasi", "arasinda", "arasina", "kadar", "ile", "den", "dan", "ten", "tan", "-"]
+    mentions = day_month_mentions(normalized_text)
+    if len(mentions) < 2 or not contains_any(normalized_text, range_words):
+        return None
+
+    start = mentions[0]
+    end = mentions[1]
+    return date_range_from_day_months(
+        start["day"],
+        start["month"],
+        end["day"],
+        end["month"],
+    )
+
+def detect_specific_day_month_from_text(normalized_text):
+    aliases = normalized_month_aliases()
+    month_pattern = month_regex_pattern()
 
     patterns = [
         rf"\b([0-3]?\d)\s*(?:\.|-)?\s*({month_pattern})\w*\b",
@@ -606,6 +735,10 @@ def detect_date_range_from_text(normalized_text):
             "start_date": today.isoformat(),
             "end_date": end.isoformat(),
         }
+
+    explicit_range = detect_explicit_date_range_from_text(normalized_text)
+    if explicit_range:
+        return explicit_range
 
     specific_day = detect_specific_day_month_from_text(normalized_text)
     if specific_day:
@@ -703,6 +836,16 @@ def quick_filter_intent_from_message(messages, current_filters=None):
         current_filters,
     )
 
+def build_llm_failure_fallback_intent(current_filters, current_slot_state):
+    return {
+        "intent": "help",
+        "filters": filters_to_dict(current_filters),
+        "should_search": False,
+        "needs_clarification": True,
+        "assistant_reply": "AI yorumlama servisi şu an yavaşladı; şehir, tarih veya kategori bilgisini daha net yazarsan devam edebilirim.",
+        "slot_state": slot_state_to_dict(current_slot_state),
+    }
+
 def enforce_slot_filling(intent, messages, current_slot_state=None):
     if intent.get("intent") == "reset_filters":
         intent["slot_state"] = empty_slot_state()
@@ -714,6 +857,10 @@ def enforce_slot_filling(intent, messages, current_slot_state=None):
     slot_state = sync_slot_state_with_filters(filters, current_slot_state)
     slot_state = apply_any_answer_to_slot_state(messages, slot_state)
     slot_state = sync_slot_state_with_filters(filters, slot_state)
+
+    broadening_slot = intent.get("broadening_slot")
+    if broadening_slot in SLOT_KEYS:
+        slot_state[broadening_slot] = "any"
 
     if intent.get("intent") in ["smalltalk", "help"]:
         intent["slot_state"] = slot_state
@@ -796,6 +943,9 @@ def prehandle_ai_chat_intent(messages, current_filters=None):
             "needs_clarification": False,
             "assistant_reply": "Tamam, arama yapmıyorum. İstersen filtreleri temizleyebilir veya yeni kriterleri yazabilirsin.",
         }
+
+    if is_broaden_request(latest):
+        return build_broaden_intent(filters)
 
     help_phrases = ["yardim", "nasil kullan", "ne yapabilirsin", "komut"]
     if any(phrase in latest for phrase in help_phrases):
@@ -1124,71 +1274,25 @@ def extract_ai_chat_intent(messages, current_filters=None):
     active_filters = filters_to_dict(current_filters)
 
     system_prompt = f"""
-        Sen PortaBilet için çalışan konuşmalı etkinlik arama asistanısın.
+        Sen PortaBilet için çalışan intent çıkarma katmanısın.
         Bugünün tarihi: {today}.
-        Mevcut aktif filtreler: {json.dumps(active_filters, ensure_ascii=False)}.
+        Mevcut filtreler: {json.dumps(active_filters, ensure_ascii=False)}.
 
-        Görevin veritabanını sorgulamak değildir. Veritabanına asla erişemezsin.
-        Sadece konuşmadan niyeti çıkar ve JSON dön.
+        Veritabanını sorgulama ve etkinlik uydurma. Sadece JSON dön.
+        JSON alanları: intent, filters, should_search, needs_clarification, assistant_reply.
 
-        JSON alanları:
-        intent, filters, should_search, needs_clarification, assistant_reply.
+        intent değerleri: search_events, update_filters, reset_filters, smalltalk, help.
+        filters yalnızca city, category, start_date, end_date içermeli.
+        category yalnızca Konser, Tiyatro, Festival, Stand-up, Spor veya null olabilir.
 
-        Kurallar:
-        - intent sadece şu değerlerden biri olabilir: search_events, update_filters, reset_filters, smalltalk, help.
-        - filters sadece city, category, start_date, end_date alanlarını içermeli.
-        - Kullanıcı mevcut filtreleri temizlemek, sıfırlamak veya baştan başlamak isterse intent reset_filters olmalı, should_search false olmalı, needs_clarification false olmalı.
-        - Kullanıcı "İstanbul ekle ama arama yapma", "şehri Ankara yap", "kategori konser olsun" gibi filtre günceller ama arama istemezse intent update_filters olmalı ve should_search false olmalı.
-        - Kullanıcı açıkça arama isterse veya yeterli arama kriteri verirse intent search_events olmalı.
-        - Tek bir filtre çoğu durumda yeterli değildir. Sadece kategori, sadece şehir veya sadece tarih varsa should_search false olmalı ve assistant_reply eksik kriteri veya "fark etmez mi?" seçeneğini sormalı.
-        - Kullanıcı "fark etmez", "herhangi", "genel ara", "direkt ara" gibi geniş aramaya izin verirse tek filtreyle should_search true olabilir.
-        - Kullanıcı arama için yeterince bilgi verdiyse veya geniş aramaya izin verdiyse should_search true olmalı.
-        - Kullanıcı eğlenceli bir şeyler arıyorum gibi belirsiz arama yaparsa should_search false, needs_clarification true olmalı; assistant_reply doğal bir takip sorusu olmalı.
-        - Kullanıcı selam, nasılsın, teşekkürler gibi sohbet ederse intent smalltalk olmalı, should_search false olmalı.
-        - Kullanıcı nasıl kullanacağını sorarsa intent help olmalı, should_search false olmalı.
-        - needs_clarification true ise assistant_reply doğal Türkçe bir takip sorusu olmalı; aynı kalıp cümleyi sürekli kullanma.
-        - Kullanıcı bir filtre alanını açıkça belirtmediyse filters içinde o alan null olmalı; mevcut filtreleri değiştirme kararını backend birleştirecek.
-        - Genel ifadeler kategori değildir. Örneğin "herhangi bir etkinlik", "etkinlik var mı", "ne var", "bir şey var mı" ifadelerinde category null olmalı.
-        - category sadece şu değerlerden biri olabilir: Konser, Tiyatro, Festival, Stand-up, Spor.
-        - Tarih varsa start_date ve end_date YYYY-MM-DD formatında olmalı.
-        - Sadece tek tarih varsa start_date ve end_date aynı gün olmalı.
-        - Tarih yoksa start_date ve end_date null olmalı.
-        - Türkçe ay adlarını doğru yorumla.
-        - Önceki assistant mesajlarını ve mevcut aktif filtreleri bağlam olarak kullan.
+        Kullanıcının açıkça söylediği yeni filtreleri yaz; söylemediği alanları null bırak.
+        Tarihten eminsen YYYY-MM-DD kullan, emin değilsen null bırak.
+        Selam/teşekkür gibi sohbetlerde smalltalk dön.
+        Yardım sorularında help dön.
+        Filtre temizleme isteğinde reset_filters dön.
+        Arama yapılmasını istemiyorsa should_search false dön.
 
-        Örnek:
-        Kullanıcı: "Ankara'da 15 ağustosta var mı?"
-        Cevap: {{"intent": "search_events", "filters": {{"city": "Ankara", "category": null, "start_date": "2026-08-15", "end_date": "2026-08-15"}}, "should_search": true, "needs_clarification": false, "assistant_reply": "Ankara için 15 Ağustos tarihine bakıyorum."}}
-
-        Örnek:
-        Kullanıcı: "20 temmuzda olan var mı spesifik olarak?"
-        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": null, "start_date": "2026-07-20", "end_date": "2026-07-20"}}, "should_search": true, "needs_clarification": false, "assistant_reply": "20 Temmuz tarihine bakıyorum."}}
-
-        Örnek:
-        Kullanıcı: "Konser var mı?"
-        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": "Konser", "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": true, "assistant_reply": "Konser için şehir veya tarih fark eder mi? Fark etmezse tüm konserlere bakabilirim."}}
-
-        Örnek:
-        Kullanıcı: "İstanbul ekle ama henüz arama"
-        Cevap: {{"intent": "update_filters", "filters": {{"city": "İstanbul", "category": null, "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": false, "assistant_reply": "İstanbul'u filtrelere ekledim, arama yapmıyorum."}}
-
-        Örnek:
-        Kullanıcı: "konser olsun"
-        Cevap: {{"intent": "update_filters", "filters": {{"city": null, "category": "Konser", "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": true, "assistant_reply": "Konser iyi. Şehir veya tarih fark eder mi, yoksa tüm konserlere mi bakayım?"}}
-
-        Örnek:
-        Kullanıcı: "fark etmez ara"
-        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": null, "start_date": null, "end_date": null}}, "should_search": true, "needs_clarification": false, "assistant_reply": "Tamam, mevcut filtrelerle geniş arıyorum."}}
-
-        Örnek:
-        Kullanıcı: "Filtreleri temizle"
-        Cevap: {{"intent": "reset_filters", "filters": {{"city": null, "category": null, "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": false, "assistant_reply": "Filtreleri temizledim."}}
-
-        Örnek:
-        Kullanıcı: "valla eğlenceli bir şeyler arıyorum"
-        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": null, "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": true, "assistant_reply": "Nasıl bir eğlence olsun: konser, festival, tiyatro veya stand-up gibi bir tür seçelim mi?"}}
-
-        Sadece JSON dön. Açıklama yazma. Markdown kullanma.
+        Sadece geçerli JSON dön. Açıklama veya Markdown yazma.
         """
 
     ollama_messages = [{"role": "system", "content": system_prompt}]
@@ -1310,15 +1414,11 @@ def ai_chat_events(request: AIChatRequest, db: Session = Depends(get_db)):
                 intent = extract_ai_chat_intent(request.messages, current_filters)
                 intent = apply_date_override_from_latest_message(intent, request.messages)
                 intent = enforce_slot_filling(intent, request.messages, current_slot_state)
-            except Exception as e:
+            except Exception:
                 logger.exception("AI chat analysis failed before response")
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "message": "AI sohbet servisi şu anda yanıt vermiyor. Lütfen biraz sonra tekrar deneyin.",
-                        "error_code": "AI_CHAT_UNAVAILABLE",
-                        "technical_error": str(e),
-                    },
+                intent = build_llm_failure_fallback_intent(
+                    current_filters,
+                    current_slot_state,
                 )
 
     filters = intent["filters"]
