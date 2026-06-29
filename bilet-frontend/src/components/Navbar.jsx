@@ -11,7 +11,8 @@ function Navbar() {
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
-  const chatEndRef = useRef(null);
+  const aiModalOverlayRef = useRef(null);
+  const chatMessagesRef = useRef(null);
 
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [aiInput, setAiInput] = useState('');
@@ -55,7 +56,14 @@ function Navbar() {
 
   useEffect(() => {
     if (isAiModalOpen) {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      aiModalOverlayRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  }, [isAiModalOpen]);
+
+  useEffect(() => {
+    if (isAiModalOpen && chatMessagesRef.current) {
+      const chatBox = chatMessagesRef.current;
+      chatBox.scrollTop = chatBox.scrollHeight;
     }
   }, [aiMessages, isAiSearching, isAiModalOpen]);
 
@@ -348,9 +356,12 @@ function Navbar() {
       </nav>
 
       {isAiModalOpen && (
-        <div className="fixed inset-0 z-[100] bg-gray-900/60 backdrop-blur-sm flex justify-center items-start pt-10 md:pt-20 px-4 overflow-y-auto">
+        <div
+          ref={aiModalOverlayRef}
+          className="fixed inset-0 z-[100] bg-gray-900/60 backdrop-blur-sm flex justify-center items-start p-3 sm:p-4 md:p-6 overflow-y-auto"
+        >
           
-          <div className="bg-white rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden border border-orange-100 flex flex-col relative mb-10">
+          <div className="bg-white rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden border border-orange-100 flex flex-col relative max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2rem)] md:max-h-[calc(100vh-3rem)]">
             
             <div className="p-6 md:p-8 bg-gradient-to-b from-orange-50 to-white border-b border-orange-100 relative">
               <button 
@@ -367,7 +378,7 @@ function Navbar() {
                 Yapay Zeka ile <span className="text-orange-500">Etkinlik Bul</span>
               </h2>
 
-              <div className="bg-white border border-orange-100 rounded-2xl p-4 h-72 overflow-y-auto shadow-inner space-y-3">
+              <div ref={chatMessagesRef} className="bg-white border border-orange-100 rounded-2xl p-4 h-72 overflow-y-auto shadow-inner space-y-3">
                 {aiMessages.map((message, index) => (
                   <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm md:text-base font-medium shadow-sm ${
@@ -386,7 +397,6 @@ function Navbar() {
                     </div>
                   </div>
                 )}
-                <div ref={chatEndRef} />
               </div>
 
               <form
@@ -432,7 +442,7 @@ function Navbar() {
               )}
             </div>
 
-            <div className="p-6 md:p-8 bg-gray-50 flex-grow overflow-y-auto max-h-[60vh]">
+            <div className="p-6 md:p-8 bg-gray-50 flex-grow overflow-y-auto max-h-[60vh] min-h-0">
               {isAiSearching ? (
                 <div className="py-20 text-center">
                   <div className="inline-block w-12 h-12 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin mb-4"></div>
