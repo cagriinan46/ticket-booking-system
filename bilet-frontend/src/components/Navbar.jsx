@@ -22,6 +22,7 @@ function Navbar() {
   const [aiEvents, setAiEvents] = useState([]);
   const [aiFiltersApplied, setAiFiltersApplied] = useState(null);
   const [aiNeedsClarification, setAiNeedsClarification] = useState(false);
+  const [aiShouldSearch, setAiShouldSearch] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [favoriteIds, setFavoriteIds] = useState([]);
 
@@ -75,66 +76,7 @@ function Navbar() {
     }
   };
 
-  const promptHasSearchClue = (prompt) => {
-    const normalizedPrompt = prompt.toLocaleLowerCase('tr-TR');
-    const categories = ['konser', 'tiyatro', 'festival', 'stand-up', 'standup', 'spor'];
-    const cities = ['istanbul', 'İstanbul'.toLocaleLowerCase('tr-TR'), 'ankara', 'izmir', 'konya', 'antalya', 'bursa', 'adana', 'eskişehir'];
-    const dateWords = ['bugün', 'yarın', 'hafta', 'ay', 'mayıs', 'haziran', 'temmuz', 'ağustos', 'eylül', 'ekim', 'kasım', 'aralık'];
-
-    return [...categories, ...cities, ...dateWords].some(word => normalizedPrompt.includes(word)) || /\d/.test(normalizedPrompt);
-  };
-
-  const hasAppliedFilter = (filters) => {
-    if (!filters) return false;
-    return Boolean(filters.city || filters.category || filters.start_date || filters.end_date);
-  };
-
-  const buildLegacyReply = (events, filters) => {
-    const parts = [];
-    if (filters?.city) parts.push(filters.city);
-    if (filters?.category) parts.push(filters.category);
-    if (filters?.start_date || filters?.end_date) {
-      parts.push(`${filters.start_date || 'başlangıç'} - ${filters.end_date || 'bitiş'}`);
-    }
-
-    if (events.length > 0) {
-      return parts.length > 0
-        ? `${parts.join(', ')} kriterleriyle ${events.length} etkinlik buldum.`
-        : `${events.length} etkinlik buldum.`;
-    }
-
-    return parts.length > 0
-      ? `${parts.join(', ')} kriterlerine uygun etkinlik bulamadım.`
-      : 'Biraz daha netleştirelim: şehir, tarih veya kategori söyleyebilir misin?';
-  };
-
-  const requestLegacyAiSearch = async (prompt) => {
-    const response = await fetch(`${backendUrl}/api/events/ai-search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt })
-    });
-    const data = await readApiResponse(response);
-
-    if (!response.ok) {
-      throw new Error(data.detail || "Yapay zeka servisi şu anda yanıt vermiyor. Backend deploy ve Ollama bağlantısını kontrol etmek gerekiyor.");
-    }
-
-    const filters = data.filters_applied || data.llm_extracted_data || null;
-    const foundEvents = Array.isArray(data.events) ? data.events : [];
-    const needsClarification = !hasAppliedFilter(filters);
-
-    return {
-      reply: needsClarification
-        ? 'Biraz daha netleştirelim: şehir, tarih veya kategori söyleyebilir misin?'
-        : buildLegacyReply(foundEvents, filters),
-      filters_applied: filters,
-      events: needsClarification ? [] : foundEvents,
-      needs_clarification: needsClarification
-    };
-  };
-
-  const requestAiChat = async (prompt, nextMessages) => {
+  const requestAiChat = async (prompt, nextMessages, currentFilters) => {
     const response = await fetch(`${backendUrl}/api/events/ai-chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -142,22 +84,14 @@ function Navbar() {
         messages: nextMessages.map(message => ({
           role: message.role,
           content: message.content
-        }))
+        })),
+        current_filters: currentFilters
       })
     });
     const data = await readApiResponse(response);
 
     if (response.status === 405) {
-      if (!promptHasSearchClue(prompt)) {
-        return {
-          reply: 'Biraz daha netleştirelim: şehir, tarih veya kategori söyleyebilir misin?',
-          filters_applied: null,
-          events: [],
-          needs_clarification: true
-        };
-      }
-
-      return requestLegacyAiSearch(prompt);
+      throw new Error("AI chat endpoint'i backend'de aktif değil. Yeni /api/events/ai-chat kodunu deploy etmek gerekiyor.");
     }
 
     if (!response.ok) {
@@ -173,19 +107,21 @@ function Navbar() {
 
     const userMessage = { role: 'user', content: prompt };
     const nextMessages = [...aiMessages, userMessage];
+    const currentFilters = aiFiltersApplied;
 
     setAiMessages(nextMessages);
     setAiInput('');
     setAiEvents([]);
-    setAiFiltersApplied(null);
     setAiNeedsClarification(false);
+    setAiShouldSearch(false);
     setIsAiSearching(true);
     setHasSearched(true);
     
     try {
-      const data = await requestAiChat(prompt, nextMessages);
+      const data = await requestAiChat(prompt, nextMessages, currentFilters);
 
       const foundEvents = Array.isArray(data.events) ? data.events : [];
+      const shouldSearch = Boolean(data.should_search);
       const assistantMessage = {
         role: 'assistant',
         content: data.reply || "Aramanı değerlendirdim."
@@ -195,8 +131,13 @@ function Navbar() {
       setAiEvents(foundEvents);
       setAiFiltersApplied(data.filters_applied || data.llm_extracted_data || null);
       setAiNeedsClarification(Boolean(data.needs_clarification));
+      setAiShouldSearch(shouldSearch);
       
       if (data.needs_clarification) {
+        return;
+      }
+
+      if (!shouldSearch) {
         return;
       }
 
@@ -453,6 +394,11 @@ function Navbar() {
                 <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm">
                   <p className="text-gray-600 font-bold text-lg">Cevabınızı bekliyorum.</p>
                   <p className="text-gray-400 mt-2">Detayı yazdığınızda uygun etkinlikleri burada göstereceğim.</p>
+                </div>
+              ) : hasSearched && !aiShouldSearch ? (
+                <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                  <p className="text-gray-600 font-bold text-lg">Arama yapılmadı.</p>
+                  <p className="text-gray-400 mt-2">Hazır olduğunuzda arama yapmamı söyleyin, etkinlikleri burada göstereceğim.</p>
                 </div>
               ) : hasSearched ? (
                 aiEvents.length === 0 ? (

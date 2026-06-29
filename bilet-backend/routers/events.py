@@ -36,8 +36,15 @@ class AIChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
 
+class AIChatFilters(BaseModel):
+    city: Optional[str] = None
+    category: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
 class AIChatRequest(BaseModel):
     messages: list[AIChatMessage]
+    current_filters: Optional[AIChatFilters] = None
 
 class EventCreate(BaseModel):
     title: str
@@ -102,6 +109,7 @@ ollama_client = Client(
 )
 
 FILTER_KEYS = ["city", "category", "start_date", "end_date"]
+AI_CHAT_INTENTS = ["search_events", "update_filters", "reset_filters", "smalltalk", "help"]
 INVALID_AI_VALUES = ["null", "", "yok", "belirtilmemiş", "belirtilmemis", "none"]
 
 AI_FILTER_JSON_SCHEMA = {
@@ -127,33 +135,45 @@ AI_FILTER_JSON_SCHEMA = {
 AI_CHAT_JSON_SCHEMA = {
     "type": "object",
     "properties": {
-        "city": {
-            "type": ["string", "null"]
+        "intent": {
+            "type": "string",
+            "enum": AI_CHAT_INTENTS
         },
-        "category": {
-            "type": ["string", "null"],
-            "enum": ["Konser", "Tiyatro", "Festival", "Stand-up", "Spor", None]
+        "filters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": ["string", "null"]
+                },
+                "category": {
+                    "type": ["string", "null"],
+                    "enum": ["Konser", "Tiyatro", "Festival", "Stand-up", "Spor", None]
+                },
+                "start_date": {
+                    "type": ["string", "null"]
+                },
+                "end_date": {
+                    "type": ["string", "null"]
+                }
+            },
+            "required": ["city", "category", "start_date", "end_date"]
         },
-        "start_date": {
-            "type": ["string", "null"]
-        },
-        "end_date": {
-            "type": ["string", "null"]
+        "should_search": {
+            "type": "boolean"
         },
         "needs_clarification": {
             "type": "boolean"
         },
-        "follow_up_question": {
-            "type": ["string", "null"]
+        "assistant_reply": {
+            "type": "string"
         }
     },
     "required": [
-        "city",
-        "category",
-        "start_date",
-        "end_date",
+        "intent",
+        "filters",
+        "should_search",
         "needs_clarification",
-        "follow_up_question"
+        "assistant_reply"
     ]
 }
 
@@ -190,7 +210,149 @@ def normalize_ai_intent(payload):
 
     return normalized
 
+def empty_event_filters():
+    return {key: None for key in FILTER_KEYS}
+
+def filters_to_dict(filters):
+    if filters is None:
+        return empty_event_filters()
+
+    if isinstance(filters, BaseModel):
+        if hasattr(filters, "model_dump"):
+            data = filters.model_dump()
+        else:
+            data = filters.dict()
+    else:
+        data = dict(filters)
+
+    return {key: clean_ai_value(data.get(key)) for key in FILTER_KEYS}
+
+def merge_event_filters(current_filters, new_filters):
+    merged = filters_to_dict(current_filters)
+    incoming = filters_to_dict(new_filters)
+
+    for key in FILTER_KEYS:
+        if incoming.get(key):
+            merged[key] = incoming[key]
+
+    return merged
+
+def latest_user_message(messages):
+    for message in reversed(messages):
+        if message.role == "user":
+            return message.content.strip()
+    return ""
+
+def user_allows_broad_search(messages):
+    latest = latest_user_message(messages).lower()
+    broad_phrases = [
+        "fark etmez",
+        "farketmez",
+        "önemli değil",
+        "onemli degil",
+        "herhangi",
+        "hepsi",
+        "tümü",
+        "tumu",
+        "genel",
+        "direkt ara",
+        "ara gitsin",
+    ]
+
+    return any(phrase in latest for phrase in broad_phrases)
+
+def active_filter_count(filters):
+    return sum(1 for key in FILTER_KEYS if filters.get(key))
+
+def build_missing_filter_question(filters):
+    category = filters.get("category")
+    city = filters.get("city")
+    has_date = bool(filters.get("start_date") or filters.get("end_date"))
+
+    if category and not city and not has_date:
+        return f"{category} için şehir veya tarih fark eder mi? İstersen 'fark etmez' deyip tüm uygun etkinliklere bakmamı söyleyebilirsin."
+
+    if city and not category and not has_date:
+        return f"{city} için hangi tür etkinlik olsun: konser, tiyatro, festival, stand-up ya da spor? Tarih fark etmiyorsa onu da söyleyebilirsin."
+
+    if has_date and not city and not category:
+        return "Bu tarih aralığında hangi şehir veya etkinlik türü ilgini çeker? Fark etmezse geniş arayabilirim."
+
+    return "Aramayı daraltmak için şehir, tarih veya kategori bilgisi ekleyebilir misin? Fark etmezse bunu söylemen yeterli."
+
+def enforce_search_readiness(intent, messages):
+    if intent.get("intent") != "search_events" or not intent.get("should_search"):
+        return intent
+
+    filters = intent.get("filters", empty_event_filters())
+    count = active_filter_count(filters)
+
+    if count == 0:
+        intent["should_search"] = False
+        intent["needs_clarification"] = True
+        intent["assistant_reply"] = "Ne aradığını biraz açalım mı? Şehir, tarih veya etkinlik türünden biriyle başlayabiliriz."
+        return intent
+
+    if count == 1 and not user_allows_broad_search(messages):
+        intent["should_search"] = False
+        intent["needs_clarification"] = True
+        intent["assistant_reply"] = build_missing_filter_question(filters)
+
+    return intent
+
+def normalize_ai_chat_intent(payload, current_filters=None):
+    intent = clean_ai_value(payload.get("intent")) or "search_events"
+    if intent not in AI_CHAT_INTENTS:
+        intent = "search_events"
+
+    assistant_reply = clean_ai_value(payload.get("assistant_reply"))
+    needs_clarification = bool(payload.get("needs_clarification", False))
+    should_search = bool(payload.get("should_search", False))
+
+    if intent == "reset_filters":
+        filters = empty_event_filters()
+        should_search = False
+        needs_clarification = False
+        assistant_reply = assistant_reply or "Filtreleri temizledim. Yeni bir arama için şehir, tarih veya kategori yazabilirsin."
+    elif intent in ["smalltalk", "help"]:
+        filters = filters_to_dict(current_filters)
+        should_search = False
+        needs_clarification = False
+        if not assistant_reply:
+            if intent == "help":
+                assistant_reply = "Şehir, tarih veya kategori söyleyerek etkinlik arayabilirsin. İstersen filtreleri güncelleyebilir veya temizleyebilirsin."
+            else:
+                assistant_reply = "Buradayım. Etkinlik aramak istersen şehir, tarih veya kategori söylemen yeterli."
+    elif intent == "update_filters":
+        filters = merge_event_filters(current_filters, payload.get("filters"))
+        should_search = False
+        assistant_reply = assistant_reply or "Filtreleri güncelledim. Hazır olduğunda arama yapmamı söyleyebilirsin."
+    else:
+        filters = merge_event_filters(current_filters, payload.get("filters"))
+        has_filter = any(filters[key] for key in FILTER_KEYS)
+        should_search = should_search and has_filter and not needs_clarification
+
+        if not has_filter and not needs_clarification:
+            needs_clarification = True
+
+        if needs_clarification:
+            should_search = False
+            assistant_reply = assistant_reply or "Ne tarz bir etkinlik düşünüyorsun? Şehir, tarih veya kategoriyle daraltabilirim."
+        else:
+            assistant_reply = assistant_reply or "Uygun etkinlikleri arıyorum."
+
+    return {
+        "intent": intent,
+        "filters": filters,
+        "should_search": should_search,
+        "needs_clarification": needs_clarification,
+        "assistant_reply": assistant_reply,
+    }
+
 def event_filters_from_intent(intent):
+    if "filters" in intent:
+        return {key: intent["filters"].get(key) for key in FILTER_KEYS}
+
     return {key: intent.get(key) for key in FILTER_KEYS}
 
 def parse_llm_json(content):
@@ -267,10 +429,14 @@ def describe_filters(intent):
     return ", ".join(parts)
 
 def build_ai_chat_reply(events, intent):
-    if intent.get("needs_clarification"):
-        return intent.get("follow_up_question")
+    if "assistant_reply" in intent and not intent.get("should_search"):
+        return intent.get("assistant_reply")
 
-    filter_text = describe_filters(intent)
+    if intent.get("needs_clarification"):
+        return intent.get("follow_up_question") or intent.get("assistant_reply")
+
+    filters = intent.get("filters") if "filters" in intent else intent
+    filter_text = describe_filters(filters)
 
     if events:
         if filter_text:
@@ -281,6 +447,22 @@ def build_ai_chat_reply(events, intent):
         return f"{filter_text} kriterlerine uygun etkinlik bulamadım. Farklı bir şehir, tarih veya kategori deneyebilirsiniz."
 
     return "Aramana uygun etkinlik bulamadım. Şehir, tarih veya kategori ekleyerek tekrar deneyebilirsiniz."
+
+def build_ai_chat_search_reply(events, intent):
+    filter_text = describe_filters(intent.get("filters", {}))
+
+    if events:
+        if filter_text:
+            return f"{filter_text} için {len(events)} etkinlik buldum."
+        return f"Aramana uygun {len(events)} etkinlik buldum."
+
+    if intent.get("assistant_reply"):
+        return intent["assistant_reply"]
+
+    if filter_text:
+        return f"{filter_text} kriterlerine uygun etkinlik bulamadım. İstersen filtreleri genişletebiliriz."
+
+    return "Bu aramaya uygun etkinlik bulamadım. İstersen şehir, tarih veya kategoriyle yeniden deneyebiliriz."
 
 def extract_ai_search_intent(prompt):
     today = date.today().isoformat()
@@ -332,40 +514,66 @@ def extract_ai_search_intent(prompt):
     llm_output = response["message"]["content"].strip()
     return normalize_ai_intent(parse_llm_json(llm_output))
 
-def extract_ai_chat_intent(messages):
+def extract_ai_chat_intent(messages, current_filters=None):
     today = date.today().isoformat()
+    active_filters = filters_to_dict(current_filters)
 
     system_prompt = f"""
         Sen PortaBilet için çalışan konuşmalı etkinlik arama asistanısın.
         Bugünün tarihi: {today}.
+        Mevcut aktif filtreler: {json.dumps(active_filters, ensure_ascii=False)}.
 
         Görevin veritabanını sorgulamak değildir. Veritabanına asla erişemezsin.
-        Sadece konuşmadan arama niyetini çıkar ve JSON dön.
+        Sadece konuşmadan niyeti çıkar ve JSON dön.
 
         JSON alanları:
-        city, category, start_date, end_date, needs_clarification, follow_up_question.
+        intent, filters, should_search, needs_clarification, assistant_reply.
 
         Kurallar:
-        - Kullanıcı en az bir somut arama kriteri verdiyse needs_clarification false olmalı.
-        - Hiç şehir, kategori veya tarih yoksa needs_clarification true olmalı.
-        - needs_clarification true ise follow_up_question doğal Türkçe bir soru olmalı.
-        - needs_clarification false ise follow_up_question null olmalı.
-        - Kullanıcı bir alanı açıkça belirtmediyse o alan null olmalı.
+        - intent sadece şu değerlerden biri olabilir: search_events, update_filters, reset_filters, smalltalk, help.
+        - filters sadece city, category, start_date, end_date alanlarını içermeli.
+        - Kullanıcı mevcut filtreleri temizlemek, sıfırlamak veya baştan başlamak isterse intent reset_filters olmalı, should_search false olmalı, needs_clarification false olmalı.
+        - Kullanıcı "İstanbul ekle ama arama yapma", "şehri Ankara yap", "kategori konser olsun" gibi filtre günceller ama arama istemezse intent update_filters olmalı ve should_search false olmalı.
+        - Kullanıcı açıkça arama isterse veya yeterli arama kriteri verirse intent search_events olmalı.
+        - Tek bir filtre çoğu durumda yeterli değildir. Sadece kategori, sadece şehir veya sadece tarih varsa should_search false olmalı ve assistant_reply eksik kriteri veya "fark etmez mi?" seçeneğini sormalı.
+        - Kullanıcı "fark etmez", "herhangi", "genel ara", "direkt ara" gibi geniş aramaya izin verirse tek filtreyle should_search true olabilir.
+        - Kullanıcı arama için yeterince bilgi verdiyse veya geniş aramaya izin verdiyse should_search true olmalı.
+        - Kullanıcı eğlenceli bir şeyler arıyorum gibi belirsiz arama yaparsa should_search false, needs_clarification true olmalı; assistant_reply doğal bir takip sorusu olmalı.
+        - Kullanıcı selam, nasılsın, teşekkürler gibi sohbet ederse intent smalltalk olmalı, should_search false olmalı.
+        - Kullanıcı nasıl kullanacağını sorarsa intent help olmalı, should_search false olmalı.
+        - needs_clarification true ise assistant_reply doğal Türkçe bir takip sorusu olmalı; aynı kalıp cümleyi sürekli kullanma.
+        - Kullanıcı bir filtre alanını açıkça belirtmediyse filters içinde o alan null olmalı; mevcut filtreleri değiştirme kararını backend birleştirecek.
         - Genel ifadeler kategori değildir. Örneğin "herhangi bir etkinlik", "etkinlik var mı", "ne var", "bir şey var mı" ifadelerinde category null olmalı.
         - category sadece şu değerlerden biri olabilir: Konser, Tiyatro, Festival, Stand-up, Spor.
         - Tarih varsa start_date ve end_date YYYY-MM-DD formatında olmalı.
         - Sadece tek tarih varsa start_date ve end_date aynı gün olmalı.
         - Tarih yoksa start_date ve end_date null olmalı.
         - Türkçe ay adlarını doğru yorumla.
-        - Önceki assistant mesajlarını sadece bağlam olarak kullan.
+        - Önceki assistant mesajlarını ve mevcut aktif filtreleri bağlam olarak kullan.
 
         Örnek:
         Kullanıcı: "Konser var mı?"
-        Cevap: {{"city": null, "category": "Konser", "start_date": null, "end_date": null, "needs_clarification": false, "follow_up_question": null}}
+        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": "Konser", "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": true, "assistant_reply": "Konser için şehir veya tarih fark eder mi? Fark etmezse tüm konserlere bakabilirim."}}
 
         Örnek:
-        Kullanıcı: "Bir şeyler bakıyorum"
-        Cevap: {{"city": null, "category": null, "start_date": null, "end_date": null, "needs_clarification": true, "follow_up_question": "Hangi şehirde veya hangi türde etkinlik arıyorsunuz?"}}
+        Kullanıcı: "İstanbul ekle ama henüz arama"
+        Cevap: {{"intent": "update_filters", "filters": {{"city": "İstanbul", "category": null, "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": false, "assistant_reply": "İstanbul'u filtrelere ekledim, arama yapmıyorum."}}
+
+        Örnek:
+        Kullanıcı: "konser olsun"
+        Cevap: {{"intent": "update_filters", "filters": {{"city": null, "category": "Konser", "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": true, "assistant_reply": "Konser iyi. Şehir veya tarih fark eder mi, yoksa tüm konserlere mi bakayım?"}}
+
+        Örnek:
+        Kullanıcı: "fark etmez ara"
+        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": null, "start_date": null, "end_date": null}}, "should_search": true, "needs_clarification": false, "assistant_reply": "Tamam, mevcut filtrelerle geniş arıyorum."}}
+
+        Örnek:
+        Kullanıcı: "Filtreleri temizle"
+        Cevap: {{"intent": "reset_filters", "filters": {{"city": null, "category": null, "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": false, "assistant_reply": "Filtreleri temizledim."}}
+
+        Örnek:
+        Kullanıcı: "valla eğlenceli bir şeyler arıyorum"
+        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": null, "start_date": null, "end_date": null}}, "should_search": false, "needs_clarification": true, "assistant_reply": "Nasıl bir eğlence olsun: konser, festival, tiyatro veya stand-up gibi bir tür seçelim mi?"}}
 
         Sadece JSON dön. Açıklama yazma. Markdown kullanma.
         """
@@ -388,7 +596,7 @@ def extract_ai_chat_intent(messages):
     )
 
     llm_output = response["message"]["content"].strip()
-    return normalize_ai_intent(parse_llm_json(llm_output))
+    return normalize_ai_chat_intent(parse_llm_json(llm_output), active_filters)
 
 @router.post("/ai-search")
 def ai_search_events(request: AISearchRequest, db: Session = Depends(get_db)):
@@ -417,30 +625,37 @@ def ai_chat_events(request: AIChatRequest, db: Session = Depends(get_db)):
             detail="Lütfen aramak istediğiniz etkinliği yazın."
         )
 
+    current_filters = filters_to_dict(request.current_filters)
+
     try:
-        intent = extract_ai_chat_intent(request.messages)
+        intent = extract_ai_chat_intent(request.messages, current_filters)
+        intent = enforce_search_readiness(intent, request.messages)
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Yapay zeka sohbet analizi başarısız oldu: {str(e)}"
         )
 
-    filters = event_filters_from_intent(intent)
+    filters = intent["filters"]
 
-    if intent.get("needs_clarification"):
+    if intent.get("needs_clarification") or not intent.get("should_search"):
         return {
             "reply": build_ai_chat_reply([], intent),
+            "intent": intent["intent"],
             "filters_applied": filters,
             "events": [],
-            "needs_clarification": True
+            "should_search": False,
+            "needs_clarification": intent["needs_clarification"]
         }
 
     events = query_events_by_filters(db, filters)
 
     return {
-        "reply": build_ai_chat_reply(events, intent),
+        "reply": build_ai_chat_search_reply(events, intent),
+        "intent": intent["intent"],
         "filters_applied": filters,
         "events": events,
+        "should_search": True,
         "needs_clarification": False
     }
 
