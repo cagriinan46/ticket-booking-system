@@ -331,18 +331,9 @@ class AIChatHelpersTest(unittest.TestCase):
         original_query = events.query_events_by_filters
 
         try:
-            events.extract_ai_chat_intent = lambda messages, current_filters=None: {
-                "intent": "search_events",
-                "filters": {
-                    "city": "İstanbul",
-                    "category": "Konser",
-                    "start_date": None,
-                    "end_date": None,
-                },
-                "should_search": True,
-                "needs_clarification": False,
-                "assistant_reply": "İstanbul'daki konserleri arıyorum.",
-            }
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
+                AssertionError("LLM should not be needed for common city and category phrases")
+            )
             events.query_events_by_filters = lambda db, filters: (_ for _ in ()).throw(
                 AssertionError("Database should not be queried until date is answered")
             )
@@ -429,9 +420,18 @@ class AIChatHelpersTest(unittest.TestCase):
 
         observed_filters = {}
         try:
-            events.extract_ai_chat_intent = lambda messages, current_filters=None: (_ for _ in ()).throw(
-                AssertionError("LLM should not be needed for common date phrases")
-            )
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: {
+                "intent": "search_events",
+                "filters": {
+                    "city": "Ankara",
+                    "category": None,
+                    "start_date": "2026-08-01",
+                    "end_date": "2026-08-31",
+                },
+                "should_search": True,
+                "needs_clarification": False,
+                "assistant_reply": "Ankara için Ağustos ayına bakıyorum.",
+            }
 
             def fake_query(db, filters):
                 observed_filters.update(filters)
@@ -450,6 +450,64 @@ class AIChatHelpersTest(unittest.TestCase):
         self.assertEqual(response["filters_applied"]["start_date"], f"{expected_year}-08-01")
         self.assertEqual(response["filters_applied"]["end_date"], f"{expected_year}-08-07")
         self.assertEqual(observed_filters["start_date"], f"{expected_year}-08-01")
+
+    def test_ai_chat_turns_specific_day_month_reply_into_single_day_filter(self):
+        today = events.date.today()
+        expected_year = today.year if today.month <= 8 else today.year + 1
+        request = events.AIChatRequest(
+            messages=[
+                events.AIChatMessage(role="assistant", content="Ankara için tarih aralığı var mı, yoksa tarih fark etmez mi?"),
+                events.AIChatMessage(role="user", content="ankarada 15 agustosta var mi")
+            ],
+            current_filters=events.AIChatFilters(city="Ankara"),
+            slot_state=events.AIChatSlotState(
+                category="any",
+                city="filled",
+                date="unknown",
+                requested_slot="date",
+            ),
+        )
+
+        original_extract = events.extract_ai_chat_intent
+        original_query = events.query_events_by_filters
+
+        try:
+            events.extract_ai_chat_intent = lambda messages, current_filters=None: {
+                "intent": "search_events",
+                "filters": {
+                    "city": "Ankara",
+                    "category": None,
+                    "start_date": "2026-08-01",
+                    "end_date": "2026-08-31",
+                },
+                "should_search": True,
+                "needs_clarification": False,
+                "assistant_reply": "Ankara için Ağustos ayına bakıyorum.",
+            }
+            events.query_events_by_filters = lambda db, filters: []
+
+            response = events.ai_chat_events(request, db=object())
+        finally:
+            events.extract_ai_chat_intent = original_extract
+            events.query_events_by_filters = original_query
+
+        expected_date = f"{expected_year}-08-15"
+        self.assertTrue(response["should_search"])
+        self.assertEqual(response["filters_applied"]["start_date"], expected_date)
+        self.assertEqual(response["filters_applied"]["end_date"], expected_date)
+
+    def test_ai_chat_does_not_widen_specific_day_month_to_whole_month(self):
+        today = events.date.today()
+        expected_year = today.year if today.month <= 7 else today.year + 1
+        normalized = events.normalize_text_for_intent("20 temmuzda olan var mi spesifik olarak")
+
+        date_range = events.detect_date_range_from_text(normalized)
+
+        expected_date = f"{expected_year}-07-20"
+        self.assertEqual(date_range, {
+            "start_date": expected_date,
+            "end_date": expected_date,
+        })
 
     def test_ai_chat_smalltalk_does_not_turn_into_search_prompt(self):
         request = events.AIChatRequest(

@@ -18,6 +18,7 @@ import calendar as calendar_module
 import json
 import logging
 import os
+import re
 import requests
 import ollama
 import time
@@ -425,41 +426,39 @@ def slot_state_is_ready(slot_state):
     state = slot_state_to_dict(slot_state)
     return all(state[slot] in ["filled", "any"] for slot in SLOT_KEYS)
 
+def contains_any(text, terms):
+    return any(term in text for term in terms)
+
+def is_reset_request(normalized_text):
+    reset_action = contains_any(normalized_text, ["temizle", "sil", "sifirla"])
+    reset_scope = contains_any(normalized_text, ["filtre", "arama", "hepsi", "her sey"])
+    return (
+        (reset_action and reset_scope)
+        or normalized_text in ["temizle", "sifirla"]
+        or "bastan basla" in normalized_text
+    )
+
+def is_meta_stop_request(normalized_text):
+    if normalized_text in ["bekle", "dur"]:
+        return True
+
+    if "demedim" in normalized_text and contains_any(normalized_text, ["yanit", "cevap", "hazirla", "arama", "ara"]):
+        return True
+
+    return "arama" in normalized_text and contains_any(normalized_text, ["yapma", "etme"])
+
 def user_requested_no_search(messages):
     latest = normalize_text_for_intent(latest_user_message(messages))
     if latest in ["arama", "search etme", "dont search", "don't search"]:
         return True
 
-    no_search_phrases = [
-        "arama yapma",
-        "henuz arama",
-        "henüz arama",
-        "simdi arama",
-        "şimdi arama",
-        "search etme",
-        "dont search",
-        "don't search",
-    ]
-    return any(phrase in latest for phrase in no_search_phrases)
+    return contains_any(latest, ["arama", "search"]) and contains_any(latest, ["yapma", "etme", "henuz", "henüz", "simdi", "şimdi"])
 
 def user_explicitly_requests_search_anyway(messages):
     latest = normalize_text_for_intent(latest_user_message(messages))
-    explicit_phrases = [
-        "direkt ara",
-        "ara gitsin",
-        "boyle ara",
-        "böyle ara",
-        "bu filtrelerle ara",
-        "genel ara",
-        "genis ara",
-        "geniş ara",
-        "hepsini ara",
-        "tumunu ara",
-        "tümünü ara",
-        "fark etmez ara",
-        "farketmez ara",
-    ]
-    return any(phrase in latest for phrase in explicit_phrases)
+    wants_search = bool(re.search(r"\bara\b", latest)) or contains_any(latest, ["arama", "bakalim", "bakalım"])
+    broad_scope = contains_any(latest, ["direkt", "gitsin", "genel", "genis", "geniş", "hepsi", "tumu", "tümü", "fark etmez", "farketmez", "bu filtre"])
+    return wants_search and broad_scope
 
 def build_slot_follow_up_question(filters, slot_state):
     missing_slot = next_unknown_slot(slot_state)
@@ -533,6 +532,50 @@ def detect_week_number_from_text(normalized_text):
 
     return None
 
+def normalized_month_aliases():
+    aliases = {}
+    for month_name, month_number in MONTH_ALIASES.items():
+        aliases[normalize_text_for_intent(month_name)] = month_number
+    return aliases
+
+def detect_specific_day_month_from_text(normalized_text):
+    aliases = normalized_month_aliases()
+    month_pattern = "|".join(
+        re.escape(month_name)
+        for month_name in sorted(aliases, key=len, reverse=True)
+    )
+
+    patterns = [
+        rf"\b([0-3]?\d)\s*(?:\.|-)?\s*({month_pattern})\w*\b",
+        rf"\b({month_pattern})\w*\s*([0-3]?\d)\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, normalized_text)
+        if not match:
+            continue
+
+        first, second = match.groups()
+        if first.isdigit():
+            day = int(first)
+            month = aliases[second]
+        else:
+            month = aliases[first]
+            day = int(second)
+
+        year = year_for_month(month)
+        last_day = calendar_module.monthrange(year, month)[1]
+        if day < 1 or day > last_day:
+            return None
+
+        exact_date = date(year, month, day).isoformat()
+        return {
+            "start_date": exact_date,
+            "end_date": exact_date,
+        }
+
+    return None
+
 def detect_date_range_from_text(normalized_text):
     today = date.today()
 
@@ -564,9 +607,13 @@ def detect_date_range_from_text(normalized_text):
             "end_date": end.isoformat(),
         }
 
+    specific_day = detect_specific_day_month_from_text(normalized_text)
+    if specific_day:
+        return specific_day
+
     week_number = detect_week_number_from_text(normalized_text)
-    for month_name, month_number in MONTH_ALIASES.items():
-        if normalize_text_for_intent(month_name) in normalized_text:
+    for month_name, month_number in normalized_month_aliases().items():
+        if month_name in normalized_text:
             return month_date_range(month_number, week_number)
 
     return None
@@ -581,21 +628,31 @@ def latest_message_has_date_hint(normalized_text):
     month_words = [normalize_text_for_intent(month_name) for month_name in MONTH_ALIASES]
     return any(word in normalized_text for word in date_words + month_words)
 
-def quick_filter_intent_from_message(messages, current_filters=None):
-    latest_original = latest_user_message(messages)
-    latest = normalize_text_for_intent(latest_original)
-    filters = empty_event_filters()
+def apply_date_override_from_latest_message(intent, messages):
+    date_range = detect_date_range_from_text(
+        normalize_text_for_intent(latest_user_message(messages))
+    )
+    if not date_range:
+        return intent
 
+    filters = filters_to_dict(intent.get("filters"))
+    filters["start_date"] = date_range["start_date"]
+    filters["end_date"] = date_range["end_date"]
+    intent["filters"] = filters
+
+    return intent
+
+def quick_filter_intent_from_message(messages, current_filters=None):
+    latest = normalize_text_for_intent(latest_user_message(messages))
     if not latest:
         return None
 
     category = detect_category_from_text(latest)
     city = detect_city_from_text(latest)
     date_range = detect_date_range_from_text(latest)
-    has_date_hint = latest_message_has_date_hint(latest)
-    vague_search = any(
-        phrase in latest
-        for phrase in [
+    vague_search = contains_any(
+        latest,
+        [
             "eglenceli",
             "eğlenceli",
             "bir seyler",
@@ -605,15 +662,13 @@ def quick_filter_intent_from_message(messages, current_filters=None):
             "öner",
             "etkinlik bak",
             "etkinlik ara",
-        ]
+        ],
     )
-
-    if has_date_hint and not date_range and not category and not city and not vague_search:
-        return None
 
     if not category and not city and not date_range and not vague_search:
         return None
 
+    filters = empty_event_filters()
     filters["category"] = category
     filters["city"] = city
     if date_range:
@@ -724,17 +779,7 @@ def prehandle_ai_chat_intent(messages, current_filters=None):
     if not latest:
         return None
 
-    reset_phrases = [
-        "filtreleri temizle",
-        "filtreleri sil",
-        "butun filtreleri sil",
-        "tum filtreleri sil",
-        "hepsini sil",
-        "sifirla",
-        "bastan basla",
-        "temizle",
-    ]
-    if any(phrase in latest for phrase in reset_phrases):
+    if is_reset_request(latest):
         return {
             "intent": "reset_filters",
             "filters": empty_event_filters(),
@@ -743,16 +788,7 @@ def prehandle_ai_chat_intent(messages, current_filters=None):
             "assistant_reply": "Filtreleri temizledim. Baştan başlayabiliriz.",
         }
 
-    meta_stop_phrases = [
-        "yanit hazirla demedim",
-        "cevap hazirla demedim",
-        "arama demedim",
-        "arama yap demedim",
-        "arama yapma",
-        "bekle",
-        "dur",
-    ]
-    if any(phrase in latest for phrase in meta_stop_phrases):
+    if is_meta_stop_request(latest):
         return {
             "intent": "smalltalk",
             "filters": filters,
@@ -1047,6 +1083,9 @@ def extract_ai_search_intent(prompt):
         - Kullanıcı açıkça kategori belirtirse category bu değerlerden biri olmalı. Belirtmezse category null olmalı.
         - Kullanıcı şehir belirtirse city şehir adı olmalı. Belirtmezse city null olmalı.
         - Tarih varsa start_date ve end_date YYYY-MM-DD formatında olmalı.
+        - Kullanıcı belirli bir gün verirse ("20 Temmuz", "15 Ağustos" gibi) start_date ve end_date aynı gün olmalı; bu ifadeyi ayın tamamına genişletme.
+        - Kullanıcı sadece ay verirse ("Temmuz ayında" gibi) ayın başlangıç ve bitiş tarihlerini kullan.
+        - Kullanıcı hafta veya aralık verirse sadece o aralığı kullan.
         - Sadece tek tarih varsa start_date ve end_date aynı gün olmalı.
         - Tarih yoksa start_date ve end_date null olmalı.
         - Türkçe ay adlarını doğru yorumla.
@@ -1116,6 +1155,14 @@ def extract_ai_chat_intent(messages, current_filters=None):
         - Tarih yoksa start_date ve end_date null olmalı.
         - Türkçe ay adlarını doğru yorumla.
         - Önceki assistant mesajlarını ve mevcut aktif filtreleri bağlam olarak kullan.
+
+        Örnek:
+        Kullanıcı: "Ankara'da 15 ağustosta var mı?"
+        Cevap: {{"intent": "search_events", "filters": {{"city": "Ankara", "category": null, "start_date": "2026-08-15", "end_date": "2026-08-15"}}, "should_search": true, "needs_clarification": false, "assistant_reply": "Ankara için 15 Ağustos tarihine bakıyorum."}}
+
+        Örnek:
+        Kullanıcı: "20 temmuzda olan var mı spesifik olarak?"
+        Cevap: {{"intent": "search_events", "filters": {{"city": null, "category": null, "start_date": "2026-07-20", "end_date": "2026-07-20"}}, "should_search": true, "needs_clarification": false, "assistant_reply": "20 Temmuz tarihine bakıyorum."}}
 
         Örnek:
         Kullanıcı: "Konser var mı?"
@@ -1261,6 +1308,7 @@ def ai_chat_events(request: AIChatRequest, db: Session = Depends(get_db)):
             logger.info("AI chat falling back to LLM extraction")
             try:
                 intent = extract_ai_chat_intent(request.messages, current_filters)
+                intent = apply_date_override_from_latest_message(intent, request.messages)
                 intent = enforce_slot_filling(intent, request.messages, current_slot_state)
             except Exception as e:
                 logger.exception("AI chat analysis failed before response")
